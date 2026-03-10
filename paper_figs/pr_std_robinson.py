@@ -121,10 +121,12 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     fig.colorbar(p1, ax=ax_me_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
     # Plot 2: Diff Mean
-    norm_mean = TwoSlopeNorm(vmin=-15, vcenter=0, vmax=15)
+    # -13 to 14 with space 2: [-13, -11, -9, -7, -5, -3, -1, 1, 3, 5, 7, 9, 11, 13, 14]
+    diff_mean_levels = np.arange(-13, 15, 2)
+    norm_mean = TwoSlopeNorm(vmin=-13, vcenter=0, vmax=14)
     p2 = ax_diff_mean.contourf(lon_cyc, diff_mean.lat, diff_mean_cyc, transform=ccrs.PlateCarree(),
-                               levels=np.linspace(-15, 15, 16), cmap='RdBu_r', extend='both', norm=norm_mean)
-    fig.colorbar(p2, ax=ax_diff_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
+                               levels=diff_mean_levels, cmap='RdBu_r', extend='both', norm=norm_mean)
+    fig.colorbar(p2, ax=ax_diff_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_mean_levels)
 
     # Plot 3: ME Std
     p3 = ax_me_std.contourf(lon_cyc, me_std.lat, me_std_cyc, transform=ccrs.PlateCarree(),
@@ -132,10 +134,12 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     fig.colorbar(p3, ax=ax_me_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
     # Plot 4: Diff Std
-    norm_std = TwoSlopeNorm(vmin=-5, vcenter=0, vmax=5)
+    # -7 to 7 with space 2: [-7, -5, -3, -1, 1, 3, 5, 7]
+    diff_std_levels = np.arange(-7, 8, 2)
+    norm_std = TwoSlopeNorm(vmin=-7, vcenter=0, vmax=7)
     p4 = ax_diff_std.contourf(lon_cyc, diff_std.lat, diff_std_cyc, transform=ccrs.PlateCarree(),
-                              levels=np.linspace(-5, 5, 21), cmap='RdBu_r', extend='both', norm=norm_std)
-    fig.colorbar(p4, ax=ax_diff_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
+                              levels=diff_std_levels, cmap='RdBu_r', extend='both', norm=norm_std)
+    fig.colorbar(p4, ax=ax_diff_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_std_levels)
 
     plt.tight_layout()
 
