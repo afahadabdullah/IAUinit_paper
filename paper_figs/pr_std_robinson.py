@@ -22,7 +22,7 @@ rp_paths = [
     '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
 ]
 
-imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*.nc4'
+imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*200505*.nc4'
 
 # Cache Directory
 cache_dir = 'data'
@@ -91,9 +91,8 @@ if os.path.exists(imerge_cache_file):
 else:
     try:
         print(f"Opening IMERG monthly files from: {imerg_path} ...")
-        all_imerg_files = sorted(glob.glob(imerg_path))
-        # Since we are analyzing May 2005, use the monthly file for 200505
-        imerg_files = [f for f in all_imerg_files if '20050501' in os.path.basename(f)]
+        imerg_files = sorted(glob.glob(imerg_path))
+        print(f"Found {len(imerg_files)} IMERG files.")
         
         imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
         var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
@@ -101,6 +100,7 @@ else:
         imerg_pr = imerg_pr * 24.0 # mm/hr to mm/day
         
         # Monthly mean data already represents the month, just do spatial mass-conserving coarsen
+        # The user's new file has higher resolution (0.1 deg) so coarsen 10x10 is appropriate to get ~1deg
         imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
         imerg_mean = imerg_pr.mean(dim='time') if 'time' in imerg_pr.dims else imerg_pr
         imerg_mean.to_netcdf(imerge_cache_file)

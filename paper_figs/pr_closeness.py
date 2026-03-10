@@ -16,7 +16,7 @@ me_paths = [
 ]
 
 # IMERG data path
-imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*.nc4'
+imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*200505*.nc4'
 
 # Cache Directory
 cache_dir = 'data'
@@ -77,11 +77,9 @@ if os.path.exists(imerge_cache_file):
 else:
     try:
         print(f"Opening IMERG monthly files from: {imerg_path} ...")
-        all_imerg_files = sorted(glob.glob(imerg_path))
-        # Since we are analyzing May 2005, use the monthly file for 200505
-        imerg_files = [f for f in all_imerg_files if '20050501' in os.path.basename(f)]
+        imerg_files = sorted(glob.glob(imerg_path))
+        print(f"Found {len(imerg_files)} IMERG files.")
         
-        print(f"Found {len(imerg_files)} IMERG files in date range ({start_date} to {end_date}).")
         imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
         
         var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
@@ -94,6 +92,7 @@ else:
         imerg_pr = imerg_pr * 24.0
 
         # Monthly mean data already represents the month, just do spatial mass-conserving coarsen
+        # The user's new file has higher resolution (0.1 deg) so coarsen 10x10 is appropriate to get ~1deg
         print("Performing mass-conserving 10x10 block average of IMERG from 0.1 to ~1-degree...")
         imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
         print("IMERG spatial coarsening complete.")
