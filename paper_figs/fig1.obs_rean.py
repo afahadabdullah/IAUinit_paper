@@ -78,18 +78,22 @@ try:
     print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
     imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
     
-    # Interpolate IMERG from 0.1 degree to 1 degree resolution
-    # By interpolating to match the Reanalysis grid, we align coords perfectly
+    # Downscale IMERG from 0.1 degree to 1 degree resolution conservatively
     if me_loaded:
-        print("Interpolating IMERG spatial grid to match 1-degree Reanalysis grid...")
-        # We only interpolate lat/lon, leaving time untouched for now
+        print("Performing mass-conserving 10x10 block average of IMERG from 0.1 to 1-degree resolution...")
+        # 1. Block average 10x10 0.1-degree cells into a single 1.0-degree cell to conserve mass
+        # boundary='trim' drops any edge cells that don't perfectly fit into a group of 10
+        imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
+        
+        # 2. Snap to Reanalysis grid to align coordinates perfectly for difference subtraction
+        print("Snapping averaged IMERG grid to match exactly with Reanalysis coordinates...")
         imerg_pr = imerg_pr.interp(
             lat=ME506P.lat, 
             lon=ME506P.lon, 
-            method='linear',
+            method='nearest',
             kwargs={"fill_value": "extrapolate"}
         )
-        print("IMERG spatial interpolation complete.")
+        print("IMERG spatial coarsening and alignment complete.")
 
     imerg_loaded = True
     print("IMERG data loaded successfully.")
