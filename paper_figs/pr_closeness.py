@@ -5,6 +5,7 @@ import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from cartopy.util import add_cyclic_point
 
 # ==========================================
 # File Paths and Cache Configuration
@@ -133,11 +134,16 @@ if me_loaded and imerge_loaded:
     
     proj = ccrs.Robinson(central_longitude=180)
     
+    # Add cyclic points to avoid white line artifact near 180 longitude
+    me_mean_cyc, lon_cyc = add_cyclic_point(me_mean, coord=me_mean.lon)
+    imerg_mean_cyc, _ = add_cyclic_point(imerg_mean, coord=imerg_mean.lon)
+    diff_cyc, _ = add_cyclic_point(diff, coord=diff.lon)
+
     # 1. Reanalysis IC Mean
     ax1 = fig.add_subplot(3, 1, 1, projection=proj)
     ax1.coastlines(alpha=0.6)
     ax1.set_global()
-    p1 = ax1.contourf(me_mean.lon, me_mean.lat, me_mean.values, transform=ccrs.PlateCarree(),
+    p1 = ax1.contourf(lon_cyc, me_mean.lat, me_mean_cyc, transform=ccrs.PlateCarree(),
                       levels=np.linspace(0, 30, 16), cmap='Blues', extend='max')
     ax1.set_title('(a) Reanalysis IC Mean Precipitation (May 6-31, 2005)', fontsize=14, fontweight='bold')
     plt.colorbar(p1, ax=ax1, orientation='vertical', pad=0.02, shrink=0.8, label='mm/day')
@@ -146,7 +152,7 @@ if me_loaded and imerge_loaded:
     ax2 = fig.add_subplot(3, 1, 2, projection=proj)
     ax2.coastlines(alpha=0.6)
     ax2.set_global()
-    p2 = ax2.contourf(imerg_mean.lon, imerg_mean.lat, imerg_mean.values, transform=ccrs.PlateCarree(),
+    p2 = ax2.contourf(lon_cyc, imerg_mean.lat, imerg_mean_cyc, transform=ccrs.PlateCarree(),
                       levels=np.linspace(0, 30, 16), cmap='Blues', extend='max')
     ax2.set_title('(b) IMERG Obs Mean Precipitation (May 6-31, 2005)', fontsize=14, fontweight='bold')
     plt.colorbar(p2, ax=ax2, orientation='vertical', pad=0.02, shrink=0.8, label='mm/day')
@@ -155,7 +161,7 @@ if me_loaded and imerge_loaded:
     ax3 = fig.add_subplot(3, 1, 3, projection=proj)
     ax3.coastlines(alpha=0.6)
     ax3.set_global()
-    p3 = ax3.contourf(me_mean.lon, me_mean.lat, diff.values, transform=ccrs.PlateCarree(),
+    p3 = ax3.contourf(lon_cyc, me_mean.lat, diff_cyc, transform=ccrs.PlateCarree(),
                       levels=np.linspace(-15, 15, 16), cmap='RdBu_r', extend='both')
     ax3.set_title('(c) Difference: Reanalysis minus IMERG', fontsize=14, fontweight='bold')
     plt.colorbar(p3, ax=ax3, orientation='vertical', pad=0.02, shrink=0.8, label='mm/day')

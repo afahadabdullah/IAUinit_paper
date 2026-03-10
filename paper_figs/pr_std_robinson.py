@@ -5,6 +5,7 @@ import numpy as np
 import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from cartopy.util import add_cyclic_point
 from matplotlib.colors import TwoSlopeNorm
 
 # ==========================================
@@ -108,25 +109,31 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     format_axis(ax_me_std, '(c) Reanalysis IC Precip Std')
     format_axis(ax_diff_std, '(d) Std Difference (Reanalysis IC - IAU IC)')
 
+    # Add cyclic points to avoid white line artifact near 180 longitude
+    me_mean_cyc, lon_cyc = add_cyclic_point(me_mean, coord=me_mean.lon)
+    diff_mean_cyc, _ = add_cyclic_point(diff_mean, coord=diff_mean.lon)
+    me_std_cyc, _ = add_cyclic_point(me_std, coord=me_std.lon)
+    diff_std_cyc, _ = add_cyclic_point(diff_std, coord=diff_std.lon)
+
     # Plot 1: ME Mean
-    p1 = ax_me_mean.contourf(me_mean.lon, me_mean.lat, me_mean, transform=ccrs.PlateCarree(),
+    p1 = ax_me_mean.contourf(lon_cyc, me_mean.lat, me_mean_cyc, transform=ccrs.PlateCarree(),
                              levels=np.linspace(0, 30, 16), cmap='Blues', extend='max')
     fig.colorbar(p1, ax=ax_me_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
     # Plot 2: Diff Mean
     norm_mean = TwoSlopeNorm(vmin=-15, vcenter=0, vmax=15)
-    p2 = ax_diff_mean.contourf(diff_mean.lon, diff_mean.lat, diff_mean, transform=ccrs.PlateCarree(),
+    p2 = ax_diff_mean.contourf(lon_cyc, diff_mean.lat, diff_mean_cyc, transform=ccrs.PlateCarree(),
                                levels=np.linspace(-15, 15, 16), cmap='RdBu_r', extend='both', norm=norm_mean)
     fig.colorbar(p2, ax=ax_diff_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
     # Plot 3: ME Std
-    p3 = ax_me_std.contourf(me_std.lon, me_std.lat, me_std, transform=ccrs.PlateCarree(),
+    p3 = ax_me_std.contourf(lon_cyc, me_std.lat, me_std_cyc, transform=ccrs.PlateCarree(),
                             levels=np.linspace(0, 25, 16), cmap='YlGnBu', extend='max')
     fig.colorbar(p3, ax=ax_me_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
     # Plot 4: Diff Std
     norm_std = TwoSlopeNorm(vmin=-5, vcenter=0, vmax=5)
-    p4 = ax_diff_std.contourf(diff_std.lon, diff_std.lat, diff_std, transform=ccrs.PlateCarree(),
+    p4 = ax_diff_std.contourf(lon_cyc, diff_std.lat, diff_std_cyc, transform=ccrs.PlateCarree(),
                               levels=np.linspace(-5, 5, 21), cmap='RdBu_r', extend='both', norm=norm_std)
     fig.colorbar(p4, ax=ax_diff_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
 
