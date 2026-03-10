@@ -1,4 +1,5 @@
 import os
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 import glob
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -30,9 +31,9 @@ try:
     # Expand glob patterns explicitly
     me_files = sorted([f for p in me_paths for f in glob.glob(p)])
     print(f"Found {len(me_files)} Reanalysis files.")
-    ME506 = xr.open_mfdataset(me_files, engine='netcdf4', combine='by_coords', parallel=False)
+    ME506 = xr.open_mfdataset(me_files, engine='netcdf4', combine='by_coords', parallel=True)
     print("Computing Reanalysis precipitation...")
-    ME506P = ME506.PRECTOT.compute(scheduler='synchronous')
+    ME506P = ME506.PRECTOT.compute()
     # Convert from kg/m^2/s to mm/day
     print("Converting precipitation units from kg/m^2/s to mm/day...")
     ME506P = ME506P * 86400 
@@ -48,18 +49,18 @@ except Exception as e:
 
 print("\nLoading IMERG Observation Data...")
 try:
-    print(f"Opening IMERG files from: {imerg_path} (Parallel=False, Engine=netcdf4) ...")
+    print(f"Opening IMERG files from: {imerg_path} (Parallel=True, Engine=netcdf4) ...")
     # Force the netcdf4 engine to prevent HDF5 backend attribute locks
     # Expand glob pattern explicitly
     imerg_files = sorted(glob.glob(imerg_path))
     print(f"Found {len(imerg_files)} IMERG files.")
-    imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
+    imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=True)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
     print(f"Identified IMERG precipitation variable as: {var_name}")
     print("Computing IMERG precipitation...")
-    imerg_pr = imerg_ds[var_name].compute(scheduler='synchronous')
+    imerg_pr = imerg_ds[var_name].compute()
     
     # If the unit is mm/hr, multiply by 24 to get mm/day for equivalent comparison
     # (Assuming precipitationCal is in mm/hr)
