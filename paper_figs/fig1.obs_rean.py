@@ -1,4 +1,5 @@
 import os
+import glob
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
@@ -26,7 +27,10 @@ end_date = '2005-06-30'
 
 try:
     print(f"Opening Reanalysis files from: {me_paths[0]} ...")
-    ME506 = xr.open_mfdataset(me_paths)
+    # Expand glob patterns explicitly
+    me_files = sorted([f for p in me_paths for f in glob.glob(p)])
+    print(f"Found {len(me_files)} Reanalysis files.")
+    ME506 = xr.open_mfdataset(me_files, engine='netcdf4', combine='by_coords', parallel=False)
     print("Computing Reanalysis precipitation...")
     ME506P = ME506.PRECTOT.compute(scheduler='synchronous')
     # Convert from kg/m^2/s to mm/day
@@ -46,7 +50,10 @@ print("\nLoading IMERG Observation Data...")
 try:
     print(f"Opening IMERG files from: {imerg_path} (Parallel=False, Engine=netcdf4) ...")
     # Force the netcdf4 engine to prevent HDF5 backend attribute locks
-    imerg_ds = xr.open_mfdataset(imerg_path, engine='netcdf4', combine='by_coords', parallel=False)
+    # Expand glob pattern explicitly
+    imerg_files = sorted(glob.glob(imerg_path))
+    print(f"Found {len(imerg_files)} IMERG files.")
+    imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
