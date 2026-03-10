@@ -1,5 +1,4 @@
 import os
-os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 import glob
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -24,7 +23,7 @@ imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/codes/data/imerge/*.nc4'
 # ==========================================
 print("Loading Reanalysis IC Data...")
 start_date = '2005-05-05'
-end_date = '2005-06-30'
+end_date = '2005-05-09'
 
 try:
     print(f"Opening Reanalysis files from: {me_paths[0]} ...")
@@ -141,7 +140,7 @@ if me_loaded:
 
     # Formatting the x-axis to Month-Day for clarity
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=5))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
     plt.xticks(rotation=45, fontsize=9)
 
     plt.tight_layout()
