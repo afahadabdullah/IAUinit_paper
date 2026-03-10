@@ -22,7 +22,7 @@ rp_paths = [
     '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
 ]
 
-imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/codes/data/imerge/*.nc4'
+imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*.nc4'
 
 # Cache Directory
 cache_dir = 'data'
@@ -90,19 +90,19 @@ if os.path.exists(imerge_cache_file):
     imerg_mean = xr.open_dataarray(imerge_cache_file)
 else:
     try:
-        print(f"Opening IMERG files from: {imerg_path} ...")
+        print(f"Opening IMERG monthly files from: {imerg_path} ...")
         all_imerg_files = sorted(glob.glob(imerg_path))
-        start_yyyymmdd = start_date.replace('-', '')
-        end_yyyymmdd   = end_date.replace('-', '')
-        imerg_files = [f for f in all_imerg_files if any(yyyymmdd >= start_yyyymmdd and yyyymmdd <= end_yyyymmdd for yyyymmdd in [os.path.basename(f).split('.')[4].split('-')[0]])]
+        # Since we are analyzing May 2005, use the monthly file for 200505
+        imerg_files = [f for f in all_imerg_files if '20050501' in os.path.basename(f)]
         
         imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
         var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
         imerg_pr = imerg_ds[var_name].compute(scheduler='synchronous')
         imerg_pr = imerg_pr * 24.0 # mm/hr to mm/day
-        imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
+        
+        # Monthly mean data already represents the month, just do spatial mass-conserving coarsen
         imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
-        imerg_mean = imerg_pr.mean(dim='time')
+        imerg_mean = imerg_pr.mean(dim='time') if 'time' in imerg_pr.dims else imerg_pr
         imerg_mean.to_netcdf(imerge_cache_file)
         print("IMERG data processed and cached successfully.")
     except Exception as e:
@@ -193,7 +193,8 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     norm_close = TwoSlopeNorm(vmin=-5, vcenter=0, vmax=5)
     p6 = ax_closeness.contourf(lon_cyc, closeness.lat, closeness_cyc, transform=ccrs.PlateCarree(),
                               levels=np.linspace(-5, 5, 21), cmap='RdBu_r', extend='both', norm=norm_close)
-    fig.colorbar(p6, ax=ax_closeness, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
+    cbar6 = fig.colorbar(p6, ax=ax_closeness, orientation='horizontal', shrink=0.8, pad=0.05)
+    cbar6.set_label('mm/day (Blue: Reanalysis IC closer, Red: IAU IC closer)')
 
     plt.tight_layout()
 

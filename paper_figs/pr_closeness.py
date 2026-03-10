@@ -16,7 +16,7 @@ me_paths = [
 ]
 
 # IMERG data path
-imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/codes/data/imerge/*.nc4'
+imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*.nc4'
 
 # Cache Directory
 cache_dir = 'data'
@@ -76,17 +76,11 @@ if os.path.exists(imerge_cache_file):
     imerge_loaded = True
 else:
     try:
-        print(f"Opening IMERG files from: {imerg_path} (Parallel=False, Engine=netcdf4) ...")
+        print(f"Opening IMERG monthly files from: {imerg_path} ...")
         all_imerg_files = sorted(glob.glob(imerg_path))
-        start_yyyymmdd = start_date.replace('-', '')
-        end_yyyymmdd   = end_date.replace('-', '')
-        imerg_files = [
-            f for f in all_imerg_files
-            if any(
-                yyyymmdd >= start_yyyymmdd and yyyymmdd <= end_yyyymmdd
-                for yyyymmdd in [os.path.basename(f).split('.')[4].split('-')[0]]
-            )
-        ]
+        # Since we are analyzing May 2005, use the monthly file for 200505
+        imerg_files = [f for f in all_imerg_files if '20050501' in os.path.basename(f)]
+        
         print(f"Found {len(imerg_files)} IMERG files in date range ({start_date} to {end_date}).")
         imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
         
@@ -99,16 +93,13 @@ else:
         print("Scaling IMERG precipitation from mm/hr to mm/day...")
         imerg_pr = imerg_pr * 24.0
 
-        print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
-        imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
-        
-        # Downscale IMERG from 0.1 degree to ~1 degree using mass-conserving block average
+        # Monthly mean data already represents the month, just do spatial mass-conserving coarsen
         print("Performing mass-conserving 10x10 block average of IMERG from 0.1 to ~1-degree...")
         imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
         print("IMERG spatial coarsening complete.")
 
         # Time mean
-        imerg_mean = imerg_pr.mean(dim='time')
+        imerg_mean = imerg_pr.mean(dim='time') if 'time' in imerg_pr.dims else imerg_pr
 
         print(f"Saving IMERG mean to cache: {imerge_cache_file}")
         imerge_mean.to_netcdf(imerge_cache_file)
