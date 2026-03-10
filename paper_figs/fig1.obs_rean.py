@@ -44,9 +44,9 @@ except Exception as e:
 
 print("\nLoading IMERG Observation Data...")
 try:
-    print(f"Opening IMERG files from: {imerg_path} (Parallel=False) ...")
-    # Use load to bring it into memory or keep as dask depending on size
-    imerg_ds = xr.open_mfdataset(imerg_path, combine='by_coords', parallel=False)
+    print(f"Opening IMERG files from: {imerg_path} (Parallel=False, Engine=netcdf4) ...")
+    # Force the netcdf4 engine to prevent HDF5 backend attribute locks
+    imerg_ds = xr.open_mfdataset(imerg_path, engine='netcdf4', combine='by_coords', parallel=False)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
