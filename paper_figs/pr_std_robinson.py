@@ -7,6 +7,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.util import add_cyclic_point
 from matplotlib.colors import TwoSlopeNorm
+import matplotlib.colors as mcolors
 
 # ==========================================
 # File Paths and Cache Configuration
@@ -143,7 +144,7 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     print("\nGenerating Robinson projection plot...")
 
     proj = ccrs.Robinson(central_longitude=180)
-    fig, axes = plt.subplots(3, 2, figsize=(16, 15), subplot_kw={'projection': proj})
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10), subplot_kw={'projection': proj})
 
     def format_axis(ax, title):
         ax.set_global()
@@ -152,23 +153,17 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
 
     ax_me_mean = axes[0, 0]
     ax_diff_mean = axes[0, 1]
-    ax_me_std = axes[1, 0]
-    ax_diff_std = axes[1, 1]
-    ax_diff_imerg = axes[2, 0]
-    ax_closeness = axes[2, 1]
+    ax_diff_imerg = axes[1, 0]
+    ax_closeness = axes[1, 1]
 
     format_axis(ax_me_mean, '(a) Reanalysis IC Ens Mean Precip')
     format_axis(ax_diff_mean, '(b) Ens Mean Diff (Reanalysis IC - IAU IC)')
-    format_axis(ax_me_std, '(c) Reanalysis IC Ens Precip Std')
-    format_axis(ax_diff_std, '(d) Ens Std Diff (Reanalysis IC - IAU IC)')
-    format_axis(ax_diff_imerg, '(e) Ens Mean Diff (Reanalysis IC - IMERG)')
-    format_axis(ax_closeness, '(f) Ens Closeness: |Rean - Obs| - |IAU - Obs|')
+    format_axis(ax_diff_imerg, '(c) Ens Mean Diff (Reanalysis IC - IMERG)')
+    format_axis(ax_closeness, '(d) Ens Closeness: |Rean - Obs| - |IAU - Obs|')
 
     # Add cyclic points 
     me_mean_cyc, lon_cyc = add_cyclic_point(me_mean, coord=me_mean.lon)
     diff_mean_cyc, _ = add_cyclic_point(diff_mean, coord=diff_mean.lon)
-    me_std_cyc, _ = add_cyclic_point(me_std, coord=me_std.lon)
-    diff_std_cyc, _ = add_cyclic_point(diff_std, coord=diff_std.lon)
     diff_mean_imerg_cyc, _ = add_cyclic_point(diff_mean_imerg, coord=diff_mean_imerg.lon)
     closeness_cyc, _ = add_cyclic_point(closeness, coord=closeness.lon)
 
@@ -184,28 +179,25 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
                                levels=diff_mean_levels, cmap='RdBu_r', extend='both', norm=norm_mean)
     fig.colorbar(p2, ax=ax_diff_mean, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_mean_levels)
 
-    # Plot (c): ME Std
-    p3 = ax_me_std.contourf(lon_cyc, me_std.lat, me_std_cyc, transform=ccrs.PlateCarree(),
-                            levels=np.linspace(0, 25, 16), cmap='YlGnBu', extend='max')
-    fig.colorbar(p3, ax=ax_me_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day')
-
-    # Plot (d): Diff Std
-    diff_std_levels = np.arange(-7, 8, 2)
-    norm_std = TwoSlopeNorm(vmin=-7, vcenter=0, vmax=7)
-    p4 = ax_diff_std.contourf(lon_cyc, diff_std.lat, diff_std_cyc, transform=ccrs.PlateCarree(),
-                              levels=diff_std_levels, cmap='RdBu_r', extend='both', norm=norm_std)
-    fig.colorbar(p4, ax=ax_diff_std, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_std_levels)
-
-    # Plot (e): Diff IMERG Mean
+    # Plot (c): Diff IMERG Mean
     p5 = ax_diff_imerg.contourf(lon_cyc, diff_mean_imerg.lat, diff_mean_imerg_cyc, transform=ccrs.PlateCarree(),
                                levels=diff_mean_levels, cmap='RdBu_r', extend='both', norm=norm_mean)
     fig.colorbar(p5, ax=ax_diff_imerg, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_mean_levels)
 
-    # Plot (f): Closeness
-    close_levels = np.arange(-7, 8, 2)
-    norm_close = TwoSlopeNorm(vmin=-7, vcenter=0, vmax=7)
+    # Plot (d): Closeness
+    # Custom colormap: PiYG, but white between -1 and 1
+    close_levels = [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5]
+    cmap_base = plt.get_cmap('PiYG')
+    custom_colors = np.vstack((cmap_base(np.linspace(0, 0.4, 4)), 
+                               np.array([[1, 1, 1, 1]]), 
+                               cmap_base(np.linspace(0.6, 1, 4))))
+    cmap_close = mcolors.ListedColormap(custom_colors)
+    cmap_close.set_under(cmap_base(0.0))
+    cmap_close.set_over(cmap_base(1.0))
+    norm_close = mcolors.BoundaryNorm(close_levels, cmap_close.N)
+
     p6 = ax_closeness.contourf(lon_cyc, closeness.lat, closeness_cyc, transform=ccrs.PlateCarree(),
-                              levels=close_levels, cmap='PiYG', extend='both', norm=norm_close)
+                              levels=close_levels, cmap=cmap_close, extend='both', norm=norm_close)
     cbar6 = fig.colorbar(p6, ax=ax_closeness, orientation='horizontal', shrink=0.8, pad=0.05, ticks=close_levels)
     cbar6.set_label('mm/day (Pink: Reanalysis IC closer, Green: IAU IC closer)')
 
