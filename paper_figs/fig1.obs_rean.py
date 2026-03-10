@@ -25,34 +25,45 @@ start_date = '2005-05-05'
 end_date = '2005-06-30'
 
 try:
+    print(f"Opening Reanalysis files from: {me_paths[0]} ...")
     ME506 = xr.open_mfdataset(me_paths)
+    print("Computing Reanalysis precipitation...")
     ME506P = ME506.PRECTOT.compute()
     # Convert from kg/m^2/s to mm/day
+    print("Converting precipitation units from kg/m^2/s to mm/day...")
     ME506P = ME506P * 86400 
 
     # Slice for the analysis period aligned with precipitation spikes
+    print(f"Slicing Reanalysis data for time period: {start_date} to {end_date}...")
     ME506P = ME506P.sel(time=slice(start_date, end_date))
     me_loaded = True
+    print("Reanalysis data loaded successfully.")
 except Exception as e:
     print(f"Warning: Could not load Reanalysis IC data. Error: {e}")
     me_loaded = False
 
-print("Loading IMERG Observation Data...")
+print("\nLoading IMERG Observation Data...")
 try:
+    print(f"Opening IMERG files from: {imerg_path} ...")
     # Use load to bring it into memory or keep as dask depending on size
     imerg_ds = xr.open_mfdataset(imerg_path)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
+    print(f"Identified IMERG precipitation variable as: {var_name}")
+    print("Computing IMERG precipitation...")
     imerg_pr = imerg_ds[var_name].compute()
     
     # If the unit is mm/hr, multiply by 24 to get mm/day for equivalent comparison
     # (Assuming precipitationCal is in mm/hr)
+    print("Scaling IMERG precipitation from mm/hr to mm/day...")
     imerg_pr = imerg_pr * 24.0
 
     # Ensure time coordinates are sliced appropriately
+    print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
     imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
     imerg_loaded = True
+    print("IMERG data loaded successfully.")
 except Exception as e:
     print(f"Warning: Could not load IMERG data. Error: {e}")
     imerg_loaded = False
@@ -61,13 +72,16 @@ except Exception as e:
 # ==========================================
 # Extracting Data for Western Tropical Pacific
 # ==========================================
+print("\nExtracting data for the Western Tropical Pacific region...")
 # Region bounds from original precip_spike.ipynb
 x1, x2 = 143, 143
 y1, y2 = -1, -1
 
 if me_loaded:
+    print(f"Extracting Reanalysis regional mean for lat: {y1} to {y2}, lon: {x1} to {x2}...")
     # Extract regional mean for Reanalysis
     me_region = ME506P.sel(lat=slice(y1, y2), lon=slice(x1, x2)).mean(dim=['lon', 'lat'])
+    print("Reanalysis regional mean extracted.")
 
 if imerg_loaded and imerg_pr is not None:
     # IMERG resolution is 0.1 degree. 
@@ -77,30 +91,36 @@ if imerg_loaded and imerg_pr is not None:
         # Depending on lon format (-180 to 180 or 0 to 360), adjust if needed
         # Assuming -180 to 180 standard for IMERG
         lon_target = 143 if imerg_pr.lon.max() > 180 else 143
+        print(f"Extracting IMERG data nearest to lat: -1, lon: {lon_target}...")
         imerg_region = imerg_pr.sel(lat=-1, lon=lon_target, method='nearest')
         
         # Resample IMERG from half-hourly to 3-hourly or daily for cleaner plotting
         # (Optional, but plotting half-hourly might be very noisy)
+        print("Resampling IMERG data to 3-hourly means for plotting...")
         imerg_region = imerg_region.resample(time='3H').mean()
-    except KeyError:
-        print("Could not slice IMERG by lat/lon directly, you may need to adjust the coordinates.")
+        print("IMERG regional data extracted and resampled.")
+    except KeyError as e:
+        print(f"Could not slice IMERG by lat/lon directly, you may need to adjust the coordinates. Error: {e}")
         imerg_region = None
 
 # ==========================================
 # Plotting
 # ==========================================
 if me_loaded:
-    print("Generating Plot...")
+    print("\nGenerating Plot...")
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
+    print("Plotting Reanalysis IC line...")
     # Plot Reanalysis IC
     ax.plot(me_region.time, me_region.values, color='blue', label='Reanalysis IC', linewidth=1.5)
 
     # Plot IMERG obs
     if imerg_loaded and imerg_region is not None:
+        print("Plotting IMERG Observation line...")
         ax.plot(imerg_region.time, imerg_region.values, color='black', linestyle='-', 
                 alpha=0.7, label='IMERG Obs (3-hourly mean)', linewidth=1.2)
 
+    print("Configuring plot aesthetics (titles, labels, legends)...")
     ax.set_title('Western Tropical Pacific Precipitation: Reanalysis IC vs IMERG Obs', fontsize=12, fontweight='bold')
     ax.set_xlabel('Date (Month-Day)', fontsize=10)
     ax.set_ylabel('Precipitation (mm/day)', fontsize=10)
@@ -118,7 +138,8 @@ if me_loaded:
 
     plt.tight_layout()
     output_filename = 'fig1.obs_rean.png'
+    print(f"Saving plot to {output_filename}...")
     plt.savefig(output_filename, dpi=150)
     print(f"Plot saved successfully as {output_filename}")
 else:
-    print("Cannot generate plot without the Reanalysis data.")
+    print("\nCannot generate plot without the Reanalysis data.")
