@@ -77,10 +77,24 @@ try:
     # Ensure time coordinates are sliced appropriately
     print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
     imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
+    
+    # Interpolate IMERG from 0.1 degree to 1 degree resolution
+    # By interpolating to match the Reanalysis grid, we align coords perfectly
+    if me_loaded:
+        print("Interpolating IMERG spatial grid to match 1-degree Reanalysis grid...")
+        # We only interpolate lat/lon, leaving time untouched for now
+        imerg_pr = imerg_pr.interp(
+            lat=ME506P.lat, 
+            lon=ME506P.lon, 
+            method='linear',
+            kwargs={"fill_value": "extrapolate"}
+        )
+        print("IMERG spatial interpolation complete.")
+
     imerg_loaded = True
     print("IMERG data loaded successfully.")
 except Exception as e:
-    print(f"Warning: Could not load IMERG data. Error: {e}")
+    print(f"Warning: Could not load or interpolate IMERG data. Error: {e}")
     imerg_loaded = False
     imerg_pr = None
 
