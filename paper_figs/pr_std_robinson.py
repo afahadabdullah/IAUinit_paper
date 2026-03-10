@@ -8,6 +8,7 @@ import cartopy.feature as cfeature
 from cartopy.util import add_cyclic_point
 from matplotlib.colors import TwoSlopeNorm
 import matplotlib.colors as mcolors
+from scipy import stats
 
 # ==========================================
 # File Paths and Cache Configuration
@@ -81,17 +82,18 @@ def get_ensemble(prefix):
             std_list.append(s)
             
     if not mean_list:
-        return None, None
+        return None, None, None
         
     print(f"\nComputing ensemble mean across {len(mean_list)} members for {prefix}...")
     # Concatenate along a new dimension and compute ensemble mean
-    ens_mean = xr.concat(mean_list, dim='ens').mean(dim='ens')
+    ens_members = xr.concat(mean_list, dim='ens')
+    ens_mean = ens_members.mean(dim='ens')
     ens_std = xr.concat(std_list, dim='ens').mean(dim='ens')
     
-    return ens_mean, ens_std
+    return ens_mean, ens_std, ens_members
 
-me_mean, me_std = get_ensemble('GEOSMIT_ME')
-rp_mean, rp_std = get_ensemble('GEOSMIT_RP')
+me_mean, me_std, me_members = get_ensemble('GEOSMIT_ME')
+rp_mean, rp_std, rp_members = get_ensemble('GEOSMIT_RP')
 
 # --- Process IMERG Mean ---
 print("\nLoading IMERG Observation Data...")
@@ -123,20 +125,32 @@ else:
 if me_mean is not None and me_std is not None and rp_mean is not None and rp_std is not None and imerg_mean is not None:
     # Compute difference: Reanalysis IC - IAU IC
     diff_mean = me_mean - rp_mean
-    diff_std = me_std - rp_std
     
+    # --- Significance Testing (95%) ---
+    print("\nComputing significance masks (p < 0.05)...")
+    # (b) Rean IC vs IAU IC
+    _, p_val_b = stats.ttest_ind(me_members.values, rp_members.values, axis=0, nan_policy='omit')
+    diff_mean = diff_mean.where(p_val_b < 0.05)
+
     # Align IMERG grids for diff calculation
-    print("\nAligning IMERG grids for closeness...")
+    print("Aligning IMERG grids for closeness...")
     imerg_mean_aligned = imerg_mean.interp(lat=me_mean.lat, lon=me_mean.lon, method='nearest')
     
     # Fill any NaNs created at the wrapping boundary during interpolation
     imerg_mean_aligned = imerg_mean_aligned.bfill(dim='lon').ffill(dim='lon')
     
-    # Compute Panel (e): Mean diff (Reanalysis IC - IMERG)
+    # (c) Rean IC vs IMERG
     diff_mean_imerg = me_mean - imerg_mean_aligned
+    _, p_val_c = stats.ttest_1samp(me_members.values, imerg_mean_aligned.values, axis=0, nan_policy='omit')
+    diff_mean_imerg = diff_mean_imerg.where(p_val_c < 0.05)
     
-    # Compute Panel (f): Closeness ( |Reanalysis IC - IMERG| - |IAU IC - IMERG| )
-    closeness = np.abs(me_mean - imerg_mean_aligned) - np.abs(rp_mean - imerg_mean_aligned)
+    # (d) Closeness ( |Rean - Obs| - |IAU - Obs| )
+    # Compute closeness for each member to allow for significance testing
+    close_members = np.abs(me_members - imerg_mean_aligned) - np.abs(rp_members - imerg_mean_aligned)
+    closeness = close_members.mean(dim='ens')
+    _, p_val_d = stats.ttest_1samp(close_members.values, 0, axis=0, nan_policy='omit')
+    closeness = closeness.where(p_val_d < 0.05)
+    print("Significance masking complete.")
 
     # ==========================================
     # Plotting
