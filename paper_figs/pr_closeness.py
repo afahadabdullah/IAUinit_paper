@@ -117,6 +117,10 @@ if me_loaded and imerge_loaded:
     print("\nAligning grids for difference...")
     # Use interp to get the arrays on the exact same lats and lons smoothly
     imerg_mean_aligned = imerg_mean.interp(lat=me_mean.lat, lon=me_mean.lon, method='nearest')
+    
+    # Fill any NaNs created at the wrapping boundary during interpolation
+    imerg_mean_aligned = imerg_mean_aligned.bfill(dim='lon').ffill(dim='lon')
+    
     diff = me_mean - imerg_mean_aligned
 
     print("\nGenerating Robinson Map Plot...")
@@ -126,7 +130,7 @@ if me_loaded and imerge_loaded:
     
     # Add cyclic points to avoid white line artifact near 180 longitude
     me_mean_cyc, lon_cyc = add_cyclic_point(me_mean, coord=me_mean.lon)
-    imerg_mean_cyc, _ = add_cyclic_point(imerg_mean, coord=imerg_mean.lon)
+    imerg_mean_cyc, _ = add_cyclic_point(imerg_mean_aligned, coord=imerg_mean_aligned.lon)
     diff_cyc, _ = add_cyclic_point(diff, coord=diff.lon)
 
     # 1. Reanalysis IC Mean

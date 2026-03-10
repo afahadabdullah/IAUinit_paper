@@ -119,6 +119,9 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     print("\nAligning IMERG grids for closeness...")
     imerg_mean_aligned = imerg_mean.interp(lat=me_mean.lat, lon=me_mean.lon, method='nearest')
     
+    # Fill any NaNs created at the wrapping boundary during interpolation
+    imerg_mean_aligned = imerg_mean_aligned.bfill(dim='lon').ffill(dim='lon')
+    
     # Compute Panel (e): Mean diff (Reanalysis IC - IMERG)
     diff_mean_imerg = me_mean - imerg_mean_aligned
     
