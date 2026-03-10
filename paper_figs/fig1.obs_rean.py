@@ -114,33 +114,47 @@ if imerg_loaded and imerg_pr is not None:
 # Plotting
 # ==========================================
 if me_loaded:
-    print("\nGenerating Plot...")
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    print("\nGenerating 2-Panel Plot...")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    print("Plotting Reanalysis IC line...")
-    # Plot Reanalysis IC
-    ax.plot(me_region.time, me_region.values, color='blue', label='Reanalysis IC', linewidth=1.5)
-
-    # Plot IMERG obs
+    # --- Panel (a): Comparison ---
+    print("Plotting Panel (a): Comparison...")
+    ax1.plot(me_region.time, me_region.values, color='blue', label='Reanalysis IC', linewidth=1.5)
+    
     if imerg_loaded and imerg_region is not None:
-        print("Plotting IMERG Observation line...")
-        ax.plot(imerg_region.time, imerg_region.values, color='black', linestyle='-', 
+        ax1.plot(imerg_region.time, imerg_region.values, color='black', linestyle='-', 
                 alpha=0.7, label='IMERG Obs (3-hourly mean)', linewidth=1.2)
 
-    print("Configuring plot aesthetics (titles, labels, legends)...")
-    ax.set_title('Western Tropical Pacific Precipitation: Reanalysis IC vs IMERG Obs', fontsize=12, fontweight='bold')
-    ax.set_xlabel('Date (Month-Day)', fontsize=10)
-    ax.set_ylabel('Precipitation (mm/day)', fontsize=10)
-    
-    # Same limits if desired:
-    ax.set_ylim(-5, 135)
-    
-    ax.legend(fontsize=10)
-    ax.grid(True, linestyle='--', alpha=0.6)
+    ax1.set_title('(a) Western Tropical Pacific Precipitation: Comparison', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Precipitation (mm/day)', fontsize=10)
+    ax1.set_ylim(-5, 135)
+    ax1.legend(fontsize=10)
+    ax1.grid(True, linestyle='--', alpha=0.6)
+
+    # --- Panel (b): Difference (Reanalysis - IMERG) ---
+    if imerg_loaded and imerg_region is not None:
+        print("Plotting Panel (b): Difference (Reanalysis IC - IMERG)...")
+        # Align time and compute difference
+        # We use reindex or intersection to ensure the same time points
+        common_time = np.intersect1d(me_region.time, imerg_region.time)
+        me_sub = me_region.sel(time=common_time)
+        imerg_sub = imerg_region.sel(time=common_time)
+        diff = me_sub - imerg_sub
+
+        ax2.plot(common_time, diff.values, color='red', label='Difference (Rean-IMERG)', linewidth=1.5)
+        ax2.axhline(0, color='black', linewidth=1, linestyle='--')
+        ax2.set_title('(b) Precipitation Difference: Reanalysis IC minus IMERG', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Difference (mm/day)', fontsize=10)
+        ax2.legend(fontsize=10)
+        ax2.grid(True, linestyle='--', alpha=0.6)
+    else:
+        ax2.text(0.5, 0.5, 'IMERG data not available for difference', ha='center', va='center')
 
     # Formatting the x-axis to Month-Day for clarity
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    print("Configuring plot aesthetics (titles, labels, legends)...")
+    ax2.set_xlabel('Date (Month-Day)', fontsize=10)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    ax2.xaxis.set_major_locator(mdates.DayLocator(interval=1))
     plt.xticks(rotation=45, fontsize=9)
 
     plt.tight_layout()
