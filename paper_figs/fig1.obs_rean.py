@@ -28,7 +28,7 @@ try:
     print(f"Opening Reanalysis files from: {me_paths[0]} ...")
     ME506 = xr.open_mfdataset(me_paths)
     print("Computing Reanalysis precipitation...")
-    ME506P = ME506.PRECTOT.compute()
+    ME506P = ME506.PRECTOT.compute(scheduler='synchronous')
     # Convert from kg/m^2/s to mm/day
     print("Converting precipitation units from kg/m^2/s to mm/day...")
     ME506P = ME506P * 86400 
@@ -52,7 +52,7 @@ try:
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
     print(f"Identified IMERG precipitation variable as: {var_name}")
     print("Computing IMERG precipitation...")
-    imerg_pr = imerg_ds[var_name].compute()
+    imerg_pr = imerg_ds[var_name].compute(scheduler='synchronous')
     
     # If the unit is mm/hr, multiply by 24 to get mm/day for equivalent comparison
     # (Assuming precipitationCal is in mm/hr)
