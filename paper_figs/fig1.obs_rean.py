@@ -20,7 +20,7 @@ imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/codes/data/imerge/*.nc4'
 # Data Loading and Processing
 # ==========================================
 print("Loading Reanalysis IC Data...")
-start_date = '2005-05-05'
+start_date = '2005-05-06'
 end_date = '2005-05-09'
 
 try:
@@ -143,13 +143,18 @@ if me_loaded:
     if imerg_loaded and imerg_region is not None:
         print("Plotting Panel (b): Difference (Reanalysis IC - IMERG)...")
         # Align time and compute difference
-        # We use reindex or intersection to ensure the same time points
-        common_time = np.intersect1d(me_region.time, imerg_region.time)
-        me_sub = me_region.sel(time=common_time)
-        imerg_sub = imerg_region.sel(time=common_time)
-        diff = me_sub - imerg_sub
+        # Interpolate IMERG to match Reanalysis time points exactly since 
+        # timestamps might be slightly offset between datasets
+        try:
+            imerg_aligned = imerg_region.interp(time=me_region.time, method='nearest')
+            diff = me_region - imerg_aligned
+            
+            # Plot the difference
+            ax2.plot(me_region.time, diff.values, color='red', label='Difference (Rean-IMERG)', linewidth=1.5)
+        except Exception as e:
+            print(f"Error computing difference: {e}")
+            ax2.text(0.5, 0.5, 'Error computing difference', ha='center', va='center')
 
-        ax2.plot(common_time, diff.values, color='red', label='Difference (Rean-IMERG)', linewidth=1.5)
         ax2.axhline(0, color='black', linewidth=1, linestyle='--')
         ax2.set_title('(b) Precipitation Difference: Reanalysis IC minus IMERG', fontsize=12, fontweight='bold')
         ax2.set_ylabel('Difference (mm/day)', fontsize=10)
