@@ -11,17 +11,7 @@ from matplotlib.colors import TwoSlopeNorm
 # ==========================================
 # File Paths and Cache Configuration
 # ==========================================
-# Reanalysis Initialized (ME506) and IAU IC (RP506)
-me_paths = [
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
-]
-
-rp_paths = [
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
-]
-
+init_dates = ['0426', '0506', '0511']
 imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/data/3B-MO.MS.MRG*200505*.nc4'
 
 # Cache Directory
@@ -30,10 +20,6 @@ if not os.path.exists(cache_dir):
     os.makedirs(cache_dir)
     print(f"Created cache directory: {cache_dir}")
 
-me_cache_file_mean = os.path.join(cache_dir, 'me_mean_200505.nc4')
-rp_cache_file_mean = os.path.join(cache_dir, 'rp_mean_200505.nc4')
-me_cache_file_std = os.path.join(cache_dir, 'me_std_200505.nc4')
-rp_cache_file_std = os.path.join(cache_dir, 'rp_std_200505.nc4')
 imerge_cache_file  = os.path.join(cache_dir, 'imerge_mean_200505.nc4')
 
 # ==========================================
@@ -45,43 +31,66 @@ end_date = '2005-05-31'
 
 def load_and_process(paths, cache_file_mean, cache_file_std):
     if os.path.exists(cache_file_mean) and os.path.exists(cache_file_std):
-        print(f"Loading mean and std from cache: {cache_file_mean}, {cache_file_std}")
+        print(f"  Loading from cache: {cache_file_mean}, {cache_file_std}")
         return xr.open_dataarray(cache_file_mean), xr.open_dataarray(cache_file_std)
         
-    print(f"Opening files from: {paths} ...")
+    print(f"  Opening files from: {paths[0]}...")
     files = sorted([f for p in paths for f in glob.glob(p)])
-    print(f"Found {len(files)} files.")
+    print(f"  Found {len(files)} files.")
     if len(files) == 0:
-        print("Warning: No files found. Make sure paths are correct on PFE.")
+        print("  Warning: No files found.")
         return None, None
         
     ds = xr.open_mfdataset(files, engine='netcdf4', combine='by_coords', parallel=False)
-    print("Computing precipitation...")
+    print("  Computing precipitation...")
     pr = ds.PRECTOT.compute(scheduler='synchronous')
     
     # Convert from kg/m^2/s to mm/day
-    print("Converting units to mm/day...")
     pr = pr * 86400 
 
     # Slice for the analysis period
-    print(f"Slicing data for time period: {start_date} to {end_date}...")
     pr = pr.sel(time=slice(start_date, end_date))
     
     # Compute time mean and standard deviation
     pr_mean = pr.mean(dim='time')
     pr_std = pr.std(dim='time')
     
-    print(f"Saving mean and std calculation to cache: {cache_file_mean}, {cache_file_std}")
+    print(f"  Saving to cache: {cache_file_mean}, {cache_file_std}")
     pr_mean.to_netcdf(cache_file_mean)
     pr_std.to_netcdf(cache_file_std)
     
     return pr_mean, pr_std
 
-print("Processing Reanalysis IC Data (ME506P)...")
-me_mean, me_std = load_and_process(me_paths, me_cache_file_mean, me_cache_file_std)
+def get_ensemble(prefix):
+    mean_list = []
+    std_list = []
+    print(f"\nProcessing Ensemble Data ({prefix})...")
+    for idate in init_dates:
+        print(f" \n--- Init Date: {idate} ---")
+        paths = [
+            f'/nobackupp27/afahad/exp/IAU_exp/{prefix}{idate}/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
+            f'/nobackupp27/afahad/exp/IAU_exp/{prefix}{idate}/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
+        ]
+        c_mean = os.path.join(cache_dir, f'{prefix.lower()}_mean_200505_{idate}.nc4')
+        c_std = os.path.join(cache_dir, f'{prefix.lower()}_std_200505_{idate}.nc4')
+        
+        m, s = load_and_process(paths, c_mean, c_std)
+        if m is not None and s is not None:
+            mean_list.append(m)
+            std_list.append(s)
+            
+    if not mean_list:
+        return None, None
+        
+    print(f"\nComputing ensemble mean across {len(mean_list)} members for {prefix}...")
+    # Concatenate along a new dimension and compute ensemble mean
+    ens_mean = xr.concat(mean_list, dim='ens').mean(dim='ens')
+    ens_std = xr.concat(std_list, dim='ens').mean(dim='ens')
+    
+    return ens_mean, ens_std
 
-print("\nProcessing IAU IC Data (RP506P)...")
-rp_mean, rp_std = load_and_process(rp_paths, rp_cache_file_mean, rp_cache_file_std)
+me_mean, me_std = get_ensemble('GEOSMIT_ME')
+rp_mean, rp_std = get_ensemble('GEOSMIT_RP')
 
 # --- Process IMERG Mean ---
 print("\nLoading IMERG Observation Data...")
@@ -148,12 +157,12 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     ax_diff_imerg = axes[2, 0]
     ax_closeness = axes[2, 1]
 
-    format_axis(ax_me_mean, '(a) Reanalysis IC Mean Precip')
-    format_axis(ax_diff_mean, '(b) Mean Difference (Reanalysis IC - IAU IC)')
-    format_axis(ax_me_std, '(c) Reanalysis IC Precip Std')
-    format_axis(ax_diff_std, '(d) Std Difference (Reanalysis IC - IAU IC)')
-    format_axis(ax_diff_imerg, '(e) Mean Difference (Reanalysis IC - IMERG)')
-    format_axis(ax_closeness, '(f) Closeness: |Rean - IMERG| - |IAU IC - IMERG|')
+    format_axis(ax_me_mean, '(a) Reanalysis IC Ens Mean Precip')
+    format_axis(ax_diff_mean, '(b) Ens Mean Diff (Reanalysis IC - IAU IC)')
+    format_axis(ax_me_std, '(c) Reanalysis IC Ens Precip Std')
+    format_axis(ax_diff_std, '(d) Ens Std Diff (Reanalysis IC - IAU IC)')
+    format_axis(ax_diff_imerg, '(e) Ens Mean Diff (Reanalysis IC - IMERG)')
+    format_axis(ax_closeness, '(f) Ens Closeness: |Rean - Obs| - |IAU - Obs|')
 
     # Add cyclic points 
     me_mean_cyc, lon_cyc = add_cyclic_point(me_mean, coord=me_mean.lon)
