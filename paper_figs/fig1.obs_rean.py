@@ -30,9 +30,9 @@ try:
     # Expand glob patterns explicitly
     me_files = sorted([f for p in me_paths for f in glob.glob(p)])
     print(f"Found {len(me_files)} Reanalysis files.")
-    ME506 = xr.open_mfdataset(me_files, engine='netcdf4', combine='by_coords', parallel=True)
+    ME506 = xr.open_mfdataset(me_files, engine='netcdf4', combine='by_coords', parallel=False)
     print("Computing Reanalysis precipitation...")
-    ME506P = ME506.PRECTOT.compute()
+    ME506P = ME506.PRECTOT.compute(scheduler='synchronous')
     # Convert from kg/m^2/s to mm/day
     print("Converting precipitation units from kg/m^2/s to mm/day...")
     ME506P = ME506P * 86400 
@@ -53,13 +53,13 @@ try:
     # Expand glob pattern explicitly
     imerg_files = sorted(glob.glob(imerg_path))
     print(f"Found {len(imerg_files)} IMERG files.")
-    imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=True)
+    imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
     var_name = [v for v in imerg_ds.data_vars if 'precip' in v.lower() or 'pr' in v.lower()][0]
     print(f"Identified IMERG precipitation variable as: {var_name}")
     print("Computing IMERG precipitation...")
-    imerg_pr = imerg_ds[var_name].compute()
+    imerg_pr = imerg_ds[var_name].compute(scheduler='synchronous')
     
     # If the unit is mm/hr, multiply by 24 to get mm/day for equivalent comparison
     # (Assuming precipitationCal is in mm/hr)
