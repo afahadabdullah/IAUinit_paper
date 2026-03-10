@@ -17,8 +17,8 @@ me_paths = [
 ]
 
 rp_paths = [
-    '/nobackupp27/afahad/exp/GEOSMIT_RP0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
-    '/nobackupp27/afahad/exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
+    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
+    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
 ]
 
 # Cache Directory
