@@ -78,12 +78,13 @@ try:
     print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
     imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
     
-    # Downscale IMERG to match Reanalysis grid cell using true mass-conserving approach:
-    # Instead of coarsening the entire field (which may have grid offset issues),
-    # we slice the native 0.1-deg IMERG data to the exact bounds of the target
-    # Reanalysis 1-deg grid cell and take the area mean.
-    # For Reanalysis grid cell centered at (lat=-1, lon=143), the cell spans:
-    #   lat: -1.5 to -0.5,  lon: 142.5 to 143.5
+    # Downscale IMERG from 0.1 degree to ~1 degree using mass-conserving block average.
+    # This is physically correct: the 1-deg Reanalysis model produces area-averaged
+    # precipitation, so we must area-average the 0.1-deg IMERG field before comparing.
+    print("Performing mass-conserving 10x10 block average of IMERG from 0.1 to ~1-degree...")
+    imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
+    print("IMERG spatial coarsening complete.")
+
     imerg_loaded = True
     print("IMERG data loaded successfully.")
 except Exception as e:
@@ -96,38 +97,27 @@ except Exception as e:
 # ==========================================
 print("\nExtracting data for the Western Tropical Pacific region...")
 # Region bounds from original precip_spike.ipynb
-# Reanalysis grid cell center
 lat_center = -1
 lon_center = 143
 
 if me_loaded:
     print(f"Extracting Reanalysis data at lat: {lat_center}, lon: {lon_center}...")
-    # Extract nearest grid cell for Reanalysis
     me_region = ME506P.sel(lat=lat_center, lon=lon_center, method='nearest')
     print("Reanalysis point data extracted.")
 
 imerg_region = None
 if imerg_loaded and imerg_pr is not None:
     try:
-        # Mass-conserving: average all 0.1-deg IMERG cells within the 1-deg Reanalysis cell
-        # Cell bounds: center ± 0.5 degrees
-        lat_lo, lat_hi = lat_center - 0.5, lat_center + 0.5
-        lon_lo, lon_hi = lon_center - 0.5, lon_center + 0.5
-        print(f"Mass-conserving average of IMERG within cell bounds:")
-        print(f"  lat: [{lat_lo}, {lat_hi}], lon: [{lon_lo}, {lon_hi}]")
-        
-        # Slice IMERG to the cell bounds and take area mean
-        imerg_cell = imerg_pr.sel(
-            lat=slice(lat_lo, lat_hi),
-            lon=slice(lon_lo, lon_hi)
-        ).mean(dim=['lat', 'lon'])
+        # Select nearest coarsened grid point to the target location
+        print(f"Extracting coarsened IMERG data nearest to lat: {lat_center}, lon: {lon_center}...")
+        imerg_point = imerg_pr.sel(lat=lat_center, lon=lon_center, method='nearest')
         
         # Resample IMERG from half-hourly to 3-hourly for cleaner plotting
         print("Resampling IMERG data to 3-hourly means for plotting...")
-        imerg_region = imerg_cell.resample(time='3H').mean()
+        imerg_region = imerg_point.resample(time='3H').mean()
         print("IMERG regional data extracted and resampled.")
     except Exception as e:
-        print(f"Could not extract IMERG for target cell. Error: {e}")
+        print(f"Could not extract IMERG for target location. Error: {e}")
         imerg_region = None
 
 # ==========================================
