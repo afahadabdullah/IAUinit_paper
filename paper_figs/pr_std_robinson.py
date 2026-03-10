@@ -8,7 +8,7 @@ import cartopy.feature as cfeature
 from matplotlib.colors import TwoSlopeNorm
 
 # ==========================================
-# File Paths
+# File Paths and Cache Configuration
 # ==========================================
 # Reanalysis Initialized (ME506) and Replay (RP506)
 me_paths = [
@@ -21,6 +21,15 @@ rp_paths = [
     '/nobackupp27/afahad/exp/GEOSMIT_RP0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
 ]
 
+# Cache Directory
+cache_dir = 'data'
+if not os.path.exists(cache_dir):
+    os.makedirs(cache_dir)
+    print(f"Created cache directory: {cache_dir}")
+
+me_cache_file = os.path.join(cache_dir, 'me_std_200505.nc4')
+rp_cache_file = os.path.join(cache_dir, 'rp_std_200505.nc4')
+
 # ==========================================
 # Data Loading and Processing
 # ==========================================
@@ -28,7 +37,11 @@ rp_paths = [
 start_date = '2005-05-06'
 end_date = '2005-05-31'
 
-def load_and_process(paths):
+def load_and_process(paths, cache_file):
+    if os.path.exists(cache_file):
+        print(f"Loading std from cache: {cache_file}")
+        return xr.open_dataarray(cache_file)
+        
     print(f"Opening files from: {paths} ...")
     files = sorted([f for p in paths for f in glob.glob(p)])
     print(f"Found {len(files)} files.")
@@ -50,13 +63,17 @@ def load_and_process(paths):
     
     # Compute temporal standard deviation
     pr_std = pr.std(dim='time')
+    
+    print(f"Saving std calculation to cache: {cache_file}")
+    pr_std.to_netcdf(cache_file)
+    
     return pr_std
 
 print("Processing Reanalysis IC Data (ME506P)...")
-me_std = load_and_process(me_paths)
+me_std = load_and_process(me_paths, me_cache_file)
 
 print("\nProcessing Replay Data (RP506P)...")
-rp_std = load_and_process(rp_paths)
+rp_std = load_and_process(rp_paths, rp_cache_file)
 
 if me_std is not None and rp_std is not None:
     # Compute difference: Replay - Reanalysis IC
