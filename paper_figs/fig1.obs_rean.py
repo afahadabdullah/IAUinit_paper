@@ -99,12 +99,12 @@ except Exception as e:
     imerg_pr = None
 
 # ==========================================
-# Extracting Data for Indonesian Throughflow
+# Extracting Data for Western Tropical Pacific
 # ==========================================
-print("\nExtracting data for the Indonesian Throughflow region...")
-# Region bounds from precip_spike.ipynb: x: (114, 115), y: (5, 6)
-x1, x2 = 114, 115
-y1, y2 = 5, 6
+print("\nExtracting data for the Western Tropical Pacific region...")
+# Region bounds from original precip_spike.ipynb
+x1, x2 = 143, 143
+y1, y2 = -1, -1
 
 if me_loaded:
     print(f"Extracting Reanalysis regional mean for lat: {y1} to {y2}, lon: {x1} to {x2}...")
@@ -113,17 +113,14 @@ if me_loaded:
     print("Reanalysis regional mean extracted.")
 
 if imerg_loaded and imerg_pr is not None:
-    # IMERG resolution is 0.1 degree. 
+    # IMERG has already been interpolated to 1-degree resolution.
     try:
-        # Indonesian Throughflow coordinates: lat: 5 to 6, lon: 114 to 115
+        # Western Tropical Pacific coordinates: lat: -1, lon: 143
         # Depending on lon format (-180 to 180 or 0 to 360), adjust if needed
-        print(f"Extracting IMERG data for lat: {y1} to {y2}, lon: {x1} to {x2}...")
+        lon_target = 143 if imerg_pr.lon.max() > 180 else 143
+        print(f"Extracting IMERG data nearest to lat: -1, lon: {lon_target}...")
         
-        # Ensure we slice in the correct order depending on coordinates
-        lat_slice = slice(y1, y2) if imerg_pr.lat[0] < imerg_pr.lat[-1] else slice(y2, y1)
-        lon_slice = slice(x1, x2) if imerg_pr.lon[0] < imerg_pr.lon[-1] else slice(x2, x1)
-        
-        imerg_region = imerg_pr.sel(lat=lat_slice, lon=lon_slice).mean(dim=['lon', 'lat'])
+        imerg_region = imerg_pr.sel(lat=-1, lon=lon_target, method='nearest')
         
         # Resample IMERG from half-hourly to 3-hourly or daily for cleaner plotting
         print("Resampling IMERG data to 3-hourly means for plotting...")
@@ -148,7 +145,7 @@ if me_loaded:
         ax1.plot(imerg_region.time, imerg_region.values, color='black', linestyle='-', 
                 alpha=0.7, label='IMERG Obs (3-hourly mean)', linewidth=1.2)
 
-    ax1.set_title('(a) Indonesian Throughflow Precipitation: Comparison', fontsize=12, fontweight='bold')
+    ax1.set_title('(a) Western Tropical Pacific Precipitation: Comparison', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Precipitation (mm/day)', fontsize=10)
     ax1.set_ylim(-5, 135)
     ax1.legend(fontsize=10)
