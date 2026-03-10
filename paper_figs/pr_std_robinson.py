@@ -10,7 +10,7 @@ from matplotlib.colors import TwoSlopeNorm
 # ==========================================
 # File Paths and Cache Configuration
 # ==========================================
-# Reanalysis Initialized (ME506) and Replay (RP506)
+# Reanalysis Initialized (ME506) and IAU IC (RP506)
 me_paths = [
     '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
     '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4'
@@ -76,11 +76,11 @@ def load_and_process(paths, cache_file_mean, cache_file_std):
 print("Processing Reanalysis IC Data (ME506P)...")
 me_mean, me_std = load_and_process(me_paths, me_cache_file_mean, me_cache_file_std)
 
-print("\nProcessing Replay Data (RP506P)...")
+print("\nProcessing IAU IC Data (RP506P)...")
 rp_mean, rp_std = load_and_process(rp_paths, rp_cache_file_mean, rp_cache_file_std)
 
 if me_mean is not None and me_std is not None and rp_mean is not None and rp_std is not None:
-    # Compute difference: IAU (Reanalysis IC) - Replay
+    # Compute difference: Reanalysis IC - IAU IC
     diff_mean = me_mean - rp_mean
     diff_std = me_std - rp_std
 
@@ -104,9 +104,9 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     ax_diff_std = axes[1, 1]
 
     format_axis(ax_me_mean, '(a) Reanalysis IC Mean Precip')
-    format_axis(ax_diff_mean, '(b) Mean Difference (IAU - Replay)')
+    format_axis(ax_diff_mean, '(b) Mean Difference (Reanalysis IC - IAU IC)')
     format_axis(ax_me_std, '(c) Reanalysis IC Precip Std')
-    format_axis(ax_diff_std, '(d) Std Difference (IAU - Replay)')
+    format_axis(ax_diff_std, '(d) Std Difference (Reanalysis IC - IAU IC)')
 
     # Plot 1: ME Mean
     p1 = ax_me_mean.contourf(me_mean.lon, me_mean.lat, me_mean, transform=ccrs.PlateCarree(),
