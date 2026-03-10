@@ -190,11 +190,12 @@ if me_mean is not None and me_std is not None and rp_mean is not None and rp_std
     fig.colorbar(p5, ax=ax_diff_imerg, orientation='horizontal', shrink=0.8, pad=0.05, label='mm/day', ticks=diff_mean_levels)
 
     # Plot (f): Closeness
-    norm_close = TwoSlopeNorm(vmin=-5, vcenter=0, vmax=5)
+    close_levels = np.arange(-7, 8, 2)
+    norm_close = TwoSlopeNorm(vmin=-7, vcenter=0, vmax=7)
     p6 = ax_closeness.contourf(lon_cyc, closeness.lat, closeness_cyc, transform=ccrs.PlateCarree(),
-                              levels=np.linspace(-5, 5, 21), cmap='RdBu_r', extend='both', norm=norm_close)
-    cbar6 = fig.colorbar(p6, ax=ax_closeness, orientation='horizontal', shrink=0.8, pad=0.05)
-    cbar6.set_label('mm/day (Blue: Reanalysis IC closer, Red: IAU IC closer)')
+                              levels=close_levels, cmap='PiYG', extend='both', norm=norm_close)
+    cbar6 = fig.colorbar(p6, ax=ax_closeness, orientation='horizontal', shrink=0.8, pad=0.05, ticks=close_levels)
+    cbar6.set_label('mm/day (Pink: Reanalysis IC closer, Green: IAU IC closer)')
 
     plt.tight_layout()
 
