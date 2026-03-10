@@ -8,11 +8,9 @@ import xarray as xr
 # ==========================================
 # File Paths
 # ==========================================
-# Paths for Reanalysis Initialization (ME0506) - 200505, 200506, 200507
+# Paths for Reanalysis Initialization (ME0506) - only 200505 needed for May 5-9
 me_paths = [
     '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200505/*surf*200505*z.nc4',
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200506/*surf*200506*z.nc4',
-    '/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_surf/200507/*surf*200507*z.nc4'
 ]
 
 # IMERG data path
@@ -48,11 +46,21 @@ except Exception as e:
 
 print("\nLoading IMERG Observation Data...")
 try:
-    print(f"Opening IMERG files from: {imerg_path} (Parallel=True, Engine=netcdf4) ...")
+    print(f"Opening IMERG files from: {imerg_path} (Parallel=False, Engine=netcdf4) ...")
     # Force the netcdf4 engine to prevent HDF5 backend attribute locks
-    # Expand glob pattern explicitly
-    imerg_files = sorted(glob.glob(imerg_path))
-    print(f"Found {len(imerg_files)} IMERG files.")
+    # Expand glob pattern, then filter to only files within the date range
+    all_imerg_files = sorted(glob.glob(imerg_path))
+    # IMERG filenames contain the date as YYYYMMDD, e.g. ...3IMERG.20050505-S...
+    start_yyyymmdd = start_date.replace('-', '')  # '20050505'
+    end_yyyymmdd   = end_date.replace('-', '')    # '20050509'
+    imerg_files = [
+        f for f in all_imerg_files
+        if any(
+            yyyymmdd >= start_yyyymmdd and yyyymmdd <= end_yyyymmdd
+            for yyyymmdd in [os.path.basename(f).split('.')[4].split('-')[0]]
+        )
+    ]
+    print(f"Found {len(imerg_files)} IMERG files in date range ({start_date} to {end_date}).")
     imerg_ds = xr.open_mfdataset(imerg_files, engine='netcdf4', combine='by_coords', parallel=False)
     
     # IMERG usually has variable 'precipitationCal' in mm/hr
