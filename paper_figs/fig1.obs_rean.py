@@ -21,7 +21,7 @@ imerg_path = '/nobackupp27/afahad/project/IAUinit_paper/codes/data/imerge/*.nc4'
 # ==========================================
 print("Loading Reanalysis IC Data...")
 start_date = '2005-05-06'
-end_date = '2005-05-09'
+end_date = '2005-05-31'
 
 try:
     print(f"Opening Reanalysis files from: {me_paths[0]} ...")
@@ -183,7 +183,7 @@ if me_loaded:
     print("Configuring plot aesthetics (titles, labels, legends)...")
     ax2.set_xlabel('Date (Month-Day)', fontsize=10)
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-    ax2.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    ax2.xaxis.set_major_locator(mdates.DayLocator(interval=3))
     plt.xticks(rotation=45, fontsize=9)
 
     plt.tight_layout()
