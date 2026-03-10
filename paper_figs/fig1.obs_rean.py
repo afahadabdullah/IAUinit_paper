@@ -78,27 +78,16 @@ try:
     print(f"Slicing IMERG data for time period: {start_date} to {end_date}...")
     imerg_pr = imerg_pr.sel(time=slice(start_date, end_date))
     
-    # Downscale IMERG from 0.1 degree to 1 degree resolution conservatively
-    if me_loaded:
-        print("Performing mass-conserving 10x10 block average of IMERG from 0.1 to 1-degree resolution...")
-        # 1. Block average 10x10 0.1-degree cells into a single 1.0-degree cell to conserve mass
-        # boundary='trim' drops any edge cells that don't perfectly fit into a group of 10
-        imerg_pr = imerg_pr.coarsen(lat=10, lon=10, boundary='trim').mean()
-        
-        # 2. Snap to Reanalysis grid to align coordinates perfectly for difference subtraction
-        print("Snapping averaged IMERG grid to match exactly with Reanalysis coordinates...")
-        imerg_pr = imerg_pr.interp(
-            lat=ME506P.lat, 
-            lon=ME506P.lon, 
-            method='nearest',
-            kwargs={"fill_value": "extrapolate"}
-        )
-        print("IMERG spatial coarsening and alignment complete.")
-
+    # Downscale IMERG to match Reanalysis grid cell using true mass-conserving approach:
+    # Instead of coarsening the entire field (which may have grid offset issues),
+    # we slice the native 0.1-deg IMERG data to the exact bounds of the target
+    # Reanalysis 1-deg grid cell and take the area mean.
+    # For Reanalysis grid cell centered at (lat=-1, lon=143), the cell spans:
+    #   lat: -1.5 to -0.5,  lon: 142.5 to 143.5
     imerg_loaded = True
     print("IMERG data loaded successfully.")
 except Exception as e:
-    print(f"Warning: Could not load or interpolate IMERG data. Error: {e}")
+    print(f"Warning: Could not load or process IMERG data. Error: {e}")
     imerg_loaded = False
     imerg_pr = None
 
@@ -107,31 +96,38 @@ except Exception as e:
 # ==========================================
 print("\nExtracting data for the Western Tropical Pacific region...")
 # Region bounds from original precip_spike.ipynb
-x1, x2 = 143, 143
-y1, y2 = -1, -1
+# Reanalysis grid cell center
+lat_center = -1
+lon_center = 143
 
 if me_loaded:
-    print(f"Extracting Reanalysis regional mean for lat: {y1} to {y2}, lon: {x1} to {x2}...")
-    # Extract regional mean for Reanalysis
-    me_region = ME506P.sel(lat=slice(y1, y2), lon=slice(x1, x2)).mean(dim=['lon', 'lat'])
-    print("Reanalysis regional mean extracted.")
+    print(f"Extracting Reanalysis data at lat: {lat_center}, lon: {lon_center}...")
+    # Extract nearest grid cell for Reanalysis
+    me_region = ME506P.sel(lat=lat_center, lon=lon_center, method='nearest')
+    print("Reanalysis point data extracted.")
 
+imerg_region = None
 if imerg_loaded and imerg_pr is not None:
-    # IMERG has already been interpolated to 1-degree resolution.
     try:
-        # Western Tropical Pacific coordinates: lat: -1, lon: 143
-        # Depending on lon format (-180 to 180 or 0 to 360), adjust if needed
-        lon_target = 143 if imerg_pr.lon.max() > 180 else 143
-        print(f"Extracting IMERG data nearest to lat: -1, lon: {lon_target}...")
+        # Mass-conserving: average all 0.1-deg IMERG cells within the 1-deg Reanalysis cell
+        # Cell bounds: center ± 0.5 degrees
+        lat_lo, lat_hi = lat_center - 0.5, lat_center + 0.5
+        lon_lo, lon_hi = lon_center - 0.5, lon_center + 0.5
+        print(f"Mass-conserving average of IMERG within cell bounds:")
+        print(f"  lat: [{lat_lo}, {lat_hi}], lon: [{lon_lo}, {lon_hi}]")
         
-        imerg_region = imerg_pr.sel(lat=-1, lon=lon_target, method='nearest')
+        # Slice IMERG to the cell bounds and take area mean
+        imerg_cell = imerg_pr.sel(
+            lat=slice(lat_lo, lat_hi),
+            lon=slice(lon_lo, lon_hi)
+        ).mean(dim=['lat', 'lon'])
         
-        # Resample IMERG from half-hourly to 3-hourly or daily for cleaner plotting
+        # Resample IMERG from half-hourly to 3-hourly for cleaner plotting
         print("Resampling IMERG data to 3-hourly means for plotting...")
-        imerg_region = imerg_region.resample(time='3H').mean()
+        imerg_region = imerg_cell.resample(time='3H').mean()
         print("IMERG regional data extracted and resampled.")
-    except KeyError as e:
-        print(f"Could not slice IMERG by lat/lon directly. Error: {e}")
+    except Exception as e:
+        print(f"Could not extract IMERG for target cell. Error: {e}")
         imerg_region = None
 
 # ==========================================
