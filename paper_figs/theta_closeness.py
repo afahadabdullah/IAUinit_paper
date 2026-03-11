@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # ==========================================
 # Paths and Configuration
 # ==========================================
-EXP_LOC     = '/nobackupp27/afahad/exp/'   # original notebook loc — MIT ocean binaries live here
+EXP_LOC     = '/nobackupp27/afahad/exp/IAU_exp/'   # all exps are in IAU_exp
 INPUT_DIR   = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
 ECCO_THETA_DIR = '/nobackupp27/afahad/exp/script_replay_AGU/data/ecco/'
 
@@ -36,21 +36,14 @@ ECCO_THETA_DIR = '/nobackupp27/afahad/exp/script_replay_AGU/data/ecco/'
 cache_dir = 'data'
 os.makedirs(cache_dir, exist_ok=True)
 
-# Experiments to ensemble-average (same as ECCO_bias.ipynb)
-# init_dates that the notebook used for the ensemble (BRP=(BRP426+BRP506+BRP511)/3)
-init_dates = ['0426', '0506', '0511']
+# Only 0506 has sufficient binary output files (697 files vs 12 for 0426, 24 for 0511)
+init_dates = ['0506']
 
-# For each init date, what time slice of ECCO THETA to subtract?
-# Notebook had:
-#   BME426 = ME426 - theta.sel(time=slice('2005-04-26','2005-06-25')).data
-#   BME506 = ME506 - theta.sel(time=slice('2005-05-06','2005-07-05')).data
-#   BME511 = ME511 - theta.sel(time=slice('2005-05-11','2005-07-10')).data
-# All model runs were assigned start_date='20050501', 120 files @ 12H => 60 daily steps -> May 1 to Jun 29
-# BUT the THETA slice for 0426 is Apr 26 to Jun 25 = 61 days; they truncate to min(60,61)=60
+# ECCO THETA time slice to subtract for each init date
+# 0506: model starts May 6, so THETA should be from May 6 onward
+# Model runs are at 12H freq, so 120 files = 60 days
 theta_slices = {
-    '0426': ('2005-04-26', '2005-06-25'),
     '0506': ('2005-05-06', '2005-07-05'),
-    '0511': ('2005-05-11', '2005-07-10'),
 }
 
 # ==========================================
@@ -211,11 +204,9 @@ if len(BME_list) == 0:
     print("No valid data. Exiting.")
     exit(1)
 
-# Ensemble mean: average over available members (positional, sharing the same time axis)
-# Note: different members may have different nt; take the minimum
-min_t = min(len(b.time) for b in BME_list)
-BME = sum(b.isel(time=slice(None, min_t)) for b in BME_list) / len(BME_list)
-BRP = sum(b.isel(time=slice(None, min_t)) for b in BRP_list) / len(BRP_list)
+# Single experiment — just use as is (no averaging needed)
+BME = BME_list[0]
+BRP = BRP_list[0]
 
 # Apply same first-timestep zeroing as notebook: BME[0,:,:] = 0
 BME[0] = 0.0
