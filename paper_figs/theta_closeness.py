@@ -24,45 +24,44 @@ if not os.path.exists(cache_dir):
     os.makedirs(cache_dir)
     print(f"Created cache directory: {cache_dir}")
 
-def readmit(exp='GEOSMIT35_ctrl',loc='/nobackupp27/afahad/exp/',var=1,start_date='20050501',nfiles=120,freq='12H',nz=50, nf=6, ni=90, nj=90, ntile=13,expdir='../mit_output/'):
+def readmit(exp='GEOSMIT35_ctrl', loc='/nobackupp27/afahad/exp/', var=1, start_date='20050501', nfiles=120, freq='12H', nz=50, nf=6, ni=90, nj=90, ntile=13, expdir_suffix='../mit_output/'):
     input_dir = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
-    input_file = 'bathy_eccollc_90x50_min2pts.bin'
     
-    current_dir = os.getcwd()
-    try:
-        os.chdir(loc + exp + '/plot')
-    except:
-        pass
+    # Resolve the plot dir and mit_output dir using the exp loc
+    # Wait, the original was:
+    # os.chdir(loc + exp + '/plot')
+    # expdir = '../mit_output/' (relative to the plot dir, so it's loc + exp + '/mit_output/')
+    # Let's derive the expdir directly!
+    full_expdir = os.path.join(loc, exp, 'mit_output')
     
-    pdir='../plots_CLIM/ocean_mit/'
-    try:
-        os.system('mkdir -p '+pdir)
-    except:
-        pass
-
-    try:
-        os.chdir(expdir)
-    except Exception as e:
-        print(f"Error changing to {expdir}: {e}")
-        os.chdir(current_dir)
+    if not os.path.exists(full_expdir):
+        print(f"Error: Directory {full_expdir} does not exist.")
         return None, None
         
-    files=np.array(sorted(glob.glob('state_3d_set1*.data'))[0:nfiles])
-    time=pd.date_range(start_date,periods=len(files),freq=freq)
+    search_pattern = os.path.join(full_expdir, 'state_3d_set1*.data')
+    files = np.array(sorted(glob.glob(search_pattern))[0:nfiles])
+    if len(files) == 0:
+        print(f"Warning: No files found in {full_expdir}")
+        return None, None
+        
+    time = pd.date_range(start_date, periods=len(files), freq=freq)
     
-    djf_files=files
-    nt=len(time)
-    ndjf=len(djf_files)
-    theta_djf=np.zeros((ndjf,nz,ntile,nj,ni))
-    theta_djf[:]=np.nan
+    djf_files = files
+    nt = len(time)
+    ndjf = len(djf_files)
+    theta_djf = np.zeros((ndjf, nz, ntile, nj, ni))
+    theta_djf[:] = np.nan
     
     print(f'reading {ndjf} files for {exp}')
     for i in range(ndjf):
-        data=ecco.read_llc_to_tiles('.', djf_files[i], nk=-1,nl=-1)
-        data=np.reshape(data, (nf,nz,ntile,nj,ni))
-        theta_djf[i,:,:,:]=data[var,:,:,:,:]
+        # ecco.read_llc_to_tiles expects a directory and a filename base.
+        # Since files contain the full path, we extract the dir and short name
+        dname = os.path.dirname(djf_files[i])
+        fname = os.path.basename(djf_files[i])
+        data = ecco.read_llc_to_tiles(dname, fname, nk=-1, nl=-1)
+        data = np.reshape(data, (nf, nz, ntile, nj, ni))
+        theta_djf[i, :, :, :] = data[var, :, :, :, :]
         
-    os.chdir(current_dir)
     return (theta_djf, time)
     
 def llc2grd(theta_djf,nz=50):
