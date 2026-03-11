@@ -52,15 +52,23 @@ def readmit(exp='GEOSMIT35_ctrl', loc='/nobackupp27/afahad/exp/IAU_exp/', var=1,
     theta_djf = np.zeros((ndjf, nz, ntile, nj, ni))
     theta_djf[:] = np.nan
     
-    print(f'reading {ndjf} files for {exp}')
+    print(f'reading {ndjf} files for {exp} from {full_expdir}')
+    if ndjf == 0:
+        print(f"Warning: No files found for {exp} in {full_expdir}")
+        return None, None
+
     for i in range(ndjf):
         # ecco.read_llc_to_tiles expects a directory and a filename base.
         # Since files contain the full path, we extract the dir and short name
         dname = os.path.dirname(djf_files[i])
         fname = os.path.basename(djf_files[i])
-        data = ecco.read_llc_to_tiles(dname, fname, nk=-1, nl=-1)
-        data = np.reshape(data, (nf, nz, ntile, nj, ni))
-        theta_djf[i, :, :, :] = data[var, :, :, :, :]
+        try:
+            data = ecco.read_llc_to_tiles(dname, fname, nk=-1, nl=-1)
+            data = np.reshape(data, (nf, nz, ntile, nj, ni))
+            theta_djf[i, :, :, :] = data[var, :, :, :, :]
+        except Exception as e:
+            print(f"Failed to read/reshape {fname}: {e}")
+            return None, None
         
     return (theta_djf, time)
     
