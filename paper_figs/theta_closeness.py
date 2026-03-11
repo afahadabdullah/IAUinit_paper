@@ -236,10 +236,9 @@ if len(bme_list) == 3:
     cbar = fig.colorbar(p1, cax=cbar_ax, ticks=levels)
     cbar.set_label('Theta Bias Closeness')
 
-    output_filename = '/Users/afahad/Library/CloudStorage/OneDrive-GeorgeMasonUniversity/MacMini/Projects/IAU_initilization/IAUinit_paper/paper_figs/theta_closeness.py_output.png'
-    plt.savefig('closeness_week.png', dpi=200, bbox_inches='tight')
-    plt.savefig('/nobackupp27/afahad/scripts/initialization_shock/closeness_week.png', dpi=200, bbox_inches='tight')
-    print(f"Plot saved successfully.")
+    output_filename = 'theta_closeness.png'
+    plt.savefig(output_filename, dpi=300, bbox_inches='tight')
+    print(f"Plot saved successfully to {output_filename}")
     
 else:
     print("Missing data for 3 ensembles.")
