@@ -25,6 +25,10 @@ import ecco_v4_py as ecco
 import warnings
 warnings.filterwarnings("ignore")
 
+print("=" * 60)
+print("theta_closeness.py - Starting script...")
+print("=" * 60)
+
 # ==========================================
 # Paths and Configuration
 # ==========================================
@@ -51,6 +55,7 @@ theta_slices = {
 # ==========================================
 def llc2grd(theta_arr, nz=1):
     """Regrid LLC array (nt, nz, ntile, nj, ni) to regular (nt, nlat, nlon)."""
+    print(f"    [llc2grd] Regridding array of shape {theta_arr.shape}...")
     ecco_grid = ecco.load_ecco_grid_nc(INPUT_DIR, 'ECCO-GRID.nc')
 
     new_lat = np.arange(-90, 91, 1); nlat = len(new_lat)
@@ -68,6 +73,7 @@ def llc2grd(theta_arr, nz=1):
                 mapping_method='nearest_neighbor',
                 radius_of_influence=120000)
 
+    print(f"    [llc2grd] Done. Output shape: {np.squeeze(out).shape}")
     return np.squeeze(out), new_lon, new_lat
 
 
@@ -77,12 +83,13 @@ def llc2grd(theta_arr, nz=1):
 
 def load_ecco_theta():
     """Load ECCO THETA and regrid to lat/lon. Returns xr.DataArray (time, lat, lon)."""
+    print("\n[Step 1] Loading ECCO THETA...")
     cache = os.path.join(cache_dir, 'ecco_theta_gridded.nc')
     if os.path.exists(cache):
-        print("Loading THETA from cache...")
+        print(f"  -> Found cache: {cache}")
         return xr.open_dataarray(cache)
 
-    print("Computing THETA from ECCO files...")
+    print(f"  -> No cache found. Computing from: {ECCO_THETA_DIR}THETA_2005_0*.nc")
     ds_ecco = xr.open_mfdataset(ECCO_THETA_DIR + 'THETA_2005_0*.nc')
     eTHETA = ds_ecco.THETA[:, 0:1].compute().values   # (nt, 1, ntile, nj, ni)
 
@@ -93,7 +100,7 @@ def load_ecco_theta():
         dims=["time", "lat", "lon"]
     )
     theta.to_netcdf(cache)
-    print(f"THETA cached to {cache}")
+    print(f"  -> THETA cached to {cache}")
     return theta
 
 
@@ -101,9 +108,9 @@ def readmit_raw(exp_name, start_date='20050501', nfiles=120, freq='12H',
                 nz=50, nf=6, ni=90, nj=90, ntile=13, var=1):
     """
     Read raw LLC binary files for one experiment, return (nt, nz, ntile, nj, ni) array.
-    Mirrors the original readmit() from the notebook but uses absolute paths.
     """
     expdir = os.path.join(EXP_LOC, exp_name, 'mit_output')
+    print(f"  [readmit] Looking for binary files in: {expdir}")
     if not os.path.exists(expdir):
         print(f"  ERROR: {expdir} does not exist")
         return None, None
@@ -165,13 +172,14 @@ def load_model_daily(exp_prefix, idate):
 # ==========================================
 print("Loading ECCO THETA...")
 theta = load_ecco_theta()
-print(f"THETA shape: {theta.shape},  time: {theta.time.values[[0,-1]]}")
+print(f"  -> THETA shape: {theta.shape},  time range: {str(theta.time.values[0])[:10]} to {str(theta.time.values[-1])[:10]}")
 
 BME_list = []
 BRP_list = []
 
+print(f"\n[Step 2] Loading model data for init dates: {init_dates}")
 for idate in init_dates:
-    print(f"\n=== Init date {idate} ===")
+    print(f"\n--- Processing init date {idate} ---")
     me = load_model_daily('GEOSMIT_ME', idate)
     rp = load_model_daily('GEOSMIT_RP', idate)
     if me is None or rp is None:
@@ -208,8 +216,10 @@ if len(BME_list) == 0:
 BME = BME_list[0]
 BRP = BRP_list[0]
 
+print(f"\n[Step 3] Computing biases BME and BRP...")
 # Apply same first-timestep zeroing as notebook: BME[0,:,:] = 0
 BME[0] = 0.0
+print(f"  -> BME shape: {BME.shape}, time: {str(BME.time.values[0])[:10]} to {str(BME.time.values[-1])[:10]}")
 
 print(f"\nBME shape: {BME.shape}, time: {BME.time.values[[0,-1]]}")
 print(f"BRP shape: {BRP.shape}")
@@ -222,13 +232,17 @@ def closeness(t0, t1):
     b = np.abs(BRP.sel(time=slice(t0, t1))).mean(dim='time')
     return a - b
 
+print(f"\n[Step 4] Computing weekly closeness fields...")
 w1  = closeness('2005-05-01', '2005-05-07')
 w2  = closeness('2005-05-08', '2005-05-14')
 w34 = closeness('2005-05-15', '2005-05-30')
 w58 = closeness('2005-06-01', '2005-06-30')
 
 for name, arr in [('w1',w1),('w2',w2),('w34',w34),('w58',w58)]:
-    print(f"{name}: min={np.nanmin(arr.values):.3f}  max={np.nanmax(arr.values):.3f}")
+    vmin, vmax = np.nanmin(arr.values), np.nanmax(arr.values)
+    status = 'OK' if not np.isnan(vmin) else 'ALL NaN!'
+    print(f"  {name}: min={vmin:.3f}  max={vmax:.3f}  [{status}]")
+
 
 # ==========================================
 # Plotting – Robinson projection
