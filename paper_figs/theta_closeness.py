@@ -1,3 +1,15 @@
+"""
+theta_closeness.py
+
+Recreates the closeness plot from ECCO_bias.ipynb using Robinson map projection.
+Caches the raw LLC-gridded data for each exp/init_date to avoid recomputing.
+
+KEY DIFFERENCE from notebook:
+- Notebook used positional numpy subtraction: ME426 - theta.sel(time=...).data
+  (both arrays must have same number of timesteps; time coords are irrelevant)
+- This script does the same via numpy .values
+"""
+
 import os
 import glob
 import matplotlib.pyplot as plt
@@ -14,242 +26,254 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ==========================================
-# File Paths and Cache Configuration
+# Paths and Configuration
 # ==========================================
+EXP_LOC     = '/nobackupp27/afahad/exp/IAU_exp/'
+INPUT_DIR   = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
+ECCO_THETA_DIR = '/nobackupp27/afahad/exp/script_replay_AGU/data/ecco/'
+
+# Cache directory
+cache_dir = 'data'
+os.makedirs(cache_dir, exist_ok=True)
+
+# Experiments to ensemble-average (same as ECCO_bias.ipynb)
+# init_dates that the notebook used for the ensemble (BRP=(BRP426+BRP506+BRP511)/3)
 init_dates = ['0426', '0506', '0511']
 
-# Cache Directory
-cache_dir = 'data'
-if not os.path.exists(cache_dir):
-    os.makedirs(cache_dir)
-    print(f"Created cache directory: {cache_dir}")
-
-def readmit(exp='GEOSMIT35_ctrl', loc='/nobackupp27/afahad/exp/IAU_exp/', var=1, start_date='20050501', nfiles=120, freq='12H', nz=50, nf=6, ni=90, nj=90, ntile=13, expdir_suffix='../mit_output/'):
-    input_dir = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
-    
-    # Resolve the plot dir and mit_output dir using the exp loc
-    # Wait, the original was:
-    # os.chdir(loc + exp + '/plot')
-    # expdir = '../mit_output/' (relative to the plot dir, so it's loc + exp + '/mit_output/')
-    # Let's derive the expdir directly!
-    full_expdir = os.path.join(loc, exp, 'mit_output')
-    
-    if not os.path.exists(full_expdir):
-        print(f"Error: Directory {full_expdir} does not exist.")
-        return None, None
-        
-    search_pattern = os.path.join(full_expdir, 'state_3d_set1*.data')
-    files = np.array(sorted(glob.glob(search_pattern))[0:nfiles])
-    if len(files) == 0:
-        print(f"Warning: No files found in {full_expdir}")
-        return None, None
-        
-    time = pd.date_range(start_date, periods=len(files), freq=freq)
-    
-    djf_files = files
-    nt = len(time)
-    ndjf = len(djf_files)
-    theta_djf = np.zeros((ndjf, nz, ntile, nj, ni))
-    theta_djf[:] = np.nan
-    
-    print(f'reading {ndjf} files for {exp} from {full_expdir}')
-    if ndjf == 0:
-        print(f"Warning: No files found for {exp} in {full_expdir}")
-        return None, None
-
-    for i in range(ndjf):
-        # ecco.read_llc_to_tiles expects a directory and a filename base.
-        # Since files contain the full path, we extract the dir and short name
-        dname = os.path.dirname(djf_files[i])
-        fname = os.path.basename(djf_files[i])
-        try:
-            data = ecco.read_llc_to_tiles(dname, fname, nk=-1, nl=-1)
-            data = np.reshape(data, (nf, nz, ntile, nj, ni))
-            theta_djf[i, :, :, :] = data[var, :, :, :, :]
-        except Exception as e:
-            print(f"Failed to read/reshape {fname}: {e}")
-            return None, None
-        
-    return (theta_djf, time)
-    
-def llc2grd(theta_djf,nz=50):
-    input_dir = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
-    ecco_grid = ecco.load_ecco_grid_nc(input_dir, 'ECCO-GRID.nc')
-    theta_djf_all=np.zeros(theta_djf.shape)
-    theta_djf_all[:]=theta_djf
-
-    new_grid_delta_lat = 1
-    new_grid_delta_lon = 1
-    new_grid_min_lat = -90
-    new_grid_max_lat = 91
-    new_grid_min_lon = -180
-    new_grid_max_lon = 180
-
-    new_lat=np.arange(-90,91,1)
-    nlat=len(new_lat)
-    new_lon=np.arange(-180,180,1)
-    nlon=len(new_lon)
-
-    tt=len(theta_djf)
-    theta_djf_alli=np.zeros((tt,nz,nlat,nlon))
-
-    for i in range(tt):
-        for j in range(nz):
-            new_grid_lon_centers, new_grid_lat_centers,\
-            new_grid_lon_edges, new_grid_lat_edges,\
-            theta_djf_alli[i,j,:,:] =\
-                    ecco.resample_to_latlon(ecco_grid.XC, \
-                                            ecco_grid.YC, \
-                                            theta_djf_all[i,j,:,:,:],\
-                                            new_grid_min_lat, new_grid_max_lat, new_grid_delta_lat,\
-                                            new_grid_min_lon, new_grid_max_lon, new_grid_delta_lon,\
-                                            fill_value = np.NaN, \
-                                            mapping_method = 'nearest_neighbor',
-                                            radius_of_influence = 120000)
-    return (np.squeeze(theta_djf_alli), new_lon, new_lat)
-
-def get_theta():
-    cache_file = os.path.join(cache_dir, 'ecco_theta_gridded.nc')
-    if os.path.exists(cache_file):
-        print("Loading THETA from cache...")
-        return xr.open_dataarray(cache_file)
-    print("Computing THETA...")
-    dir='/nobackupp27/afahad/exp/script_replay_AGU/data/ecco/'
-    eTHETA=xr.open_mfdataset(dir+'THETA_2005_0*.nc').THETA.compute()
-    eTHETA=eTHETA[:,0:1,:,:,:].values
-    THETA_val,lon,lat=llc2grd(eTHETA,nz=1)
-    # The original script loads THETA using time from eTHETA
-    eTHETA_xr = xr.open_mfdataset(dir+'THETA_2005_0*.nc')
-    theta = xr.DataArray(THETA_val, coords={"time": eTHETA_xr.time.values, "lat": lat, "lon": lon}, dims=["time", "lat", "lon"])
-    theta.to_netcdf(cache_file)
-    return theta
-
-def get_model_data(exp_prefix, idate):
-    cache_file = os.path.join(cache_dir, f'{exp_prefix}_{idate}_theta.nc')
-    if os.path.exists(cache_file):
-        print(f"Loading {exp_prefix}_{idate} from cache...")
-        return xr.open_dataarray(cache_file)
-    
-    print(f"Computing {exp_prefix}_{idate}...")
-    data_val, time = readmit(f'{exp_prefix}{idate}',nz=50,nfiles=120,freq='12H',start_date='20050501')
-    if data_val is None:
-        return None
-        
-    data_val = data_val[:,0:1,:,:,:]
-    data_val, lon, lat = llc2grd(data_val, nz=1)
-    ds_da = xr.DataArray(data_val, coords={"time": time, "lat": lat, "lon": lon}, dims=["time", "lat", "lon"])
-    
-    resampled_da = ds_da.resample(time='1D').mean()
-    resampled_da.to_netcdf(cache_file)
-    return resampled_da
-
-print("Starting to load/process data...")
-theta = get_theta()
-
-bme_list = []
-brp_list = []
-
-idate_to_slice = {
-    '0426': slice('2005-04-26', '2005-06-25'),
-    '0506': slice('2005-05-06', '2005-07-05'),
-    '0511': slice('2005-05-11', '2005-07-10')
+# For each init date, what time slice of ECCO THETA to subtract?
+# Notebook had:
+#   BME426 = ME426 - theta.sel(time=slice('2005-04-26','2005-06-25')).data
+#   BME506 = ME506 - theta.sel(time=slice('2005-05-06','2005-07-05')).data
+#   BME511 = ME511 - theta.sel(time=slice('2005-05-11','2005-07-10')).data
+# All model runs were assigned start_date='20050501', 120 files @ 12H => 60 daily steps -> May 1 to Jun 29
+# BUT the THETA slice for 0426 is Apr 26 to Jun 25 = 61 days; they truncate to min(60,61)=60
+theta_slices = {
+    '0426': ('2005-04-26', '2005-06-25'),
+    '0506': ('2005-05-06', '2005-07-05'),
+    '0511': ('2005-05-11', '2005-07-10'),
 }
 
+# ==========================================
+# Helper: LLC grid to regular lat/lon grid
+# ==========================================
+def llc2grd(theta_arr, nz=1):
+    """Regrid LLC array (nt, nz, ntile, nj, ni) to regular (nt, nlat, nlon)."""
+    ecco_grid = ecco.load_ecco_grid_nc(INPUT_DIR, 'ECCO-GRID.nc')
+
+    new_lat = np.arange(-90, 91, 1); nlat = len(new_lat)
+    new_lon = np.arange(-180, 180, 1); nlon = len(new_lon)
+
+    nt = len(theta_arr)
+    out = np.zeros((nt, nz, nlat, nlon))
+
+    for i in range(nt):
+        for j in range(nz):
+            _, _, _, _, out[i, j] = ecco.resample_to_latlon(
+                ecco_grid.XC, ecco_grid.YC, theta_arr[i, j],
+                -90, 91, 1, -180, 180, 1,
+                fill_value=np.NaN,
+                mapping_method='nearest_neighbor',
+                radius_of_influence=120000)
+
+    return np.squeeze(out), new_lon, new_lat
+
+
+# ==========================================
+# Data Loading with Caching
+# ==========================================
+
+def load_ecco_theta():
+    """Load ECCO THETA and regrid to lat/lon. Returns xr.DataArray (time, lat, lon)."""
+    cache = os.path.join(cache_dir, 'ecco_theta_gridded.nc')
+    if os.path.exists(cache):
+        print("Loading THETA from cache...")
+        return xr.open_dataarray(cache)
+
+    print("Computing THETA from ECCO files...")
+    ds_ecco = xr.open_mfdataset(ECCO_THETA_DIR + 'THETA_2005_0*.nc')
+    eTHETA = ds_ecco.THETA[:, 0:1].compute().values   # (nt, 1, ntile, nj, ni)
+
+    val, lon, lat = llc2grd(eTHETA, nz=1)             # (nt, nlat, nlon)
+    theta = xr.DataArray(
+        val,
+        coords={"time": ds_ecco.time.values, "lat": lat, "lon": lon},
+        dims=["time", "lat", "lon"]
+    )
+    theta.to_netcdf(cache)
+    print(f"THETA cached to {cache}")
+    return theta
+
+
+def readmit_raw(exp_name, start_date='20050501', nfiles=120, freq='12H',
+                nz=50, nf=6, ni=90, nj=90, ntile=13, var=1):
+    """
+    Read raw LLC binary files for one experiment, return (nt, nz, ntile, nj, ni) array.
+    Mirrors the original readmit() from the notebook but uses absolute paths.
+    """
+    expdir = os.path.join(EXP_LOC, exp_name, 'mit_output')
+    if not os.path.exists(expdir):
+        print(f"  ERROR: {expdir} does not exist")
+        return None, None
+
+    pattern = os.path.join(expdir, 'state_3d_set1*.data')
+    files = np.array(sorted(glob.glob(pattern))[:nfiles])
+    if len(files) == 0:
+        print(f"  WARNING: No files in {expdir}")
+        return None, None
+
+    time = pd.date_range(start_date, periods=len(files), freq=freq)
+    nt = len(files)
+    data_out = np.zeros((nt, nz, ntile, nj, ni), dtype=np.float32)
+    data_out[:] = np.nan
+
+    print(f"  Reading {nt} files for {exp_name}...")
+    for i, fpath in enumerate(files):
+        dname, fname = os.path.dirname(fpath), os.path.basename(fpath)
+        try:
+            raw = ecco.read_llc_to_tiles(dname, fname, nk=-1, nl=-1)
+            raw = np.reshape(raw, (nf, nz, ntile, nj, ni))
+            data_out[i] = raw[var]
+        except Exception as e:
+            print(f"  Failed {fname}: {e}")
+            return None, None
+
+    return data_out, time
+
+
+def load_model_daily(exp_prefix, idate):
+    """
+    Load daily-mean surface theta for one exp/init_date.
+    Returns xr.DataArray (time_daily, lat, lon).
+    """
+    cache = os.path.join(cache_dir, f'{exp_prefix}_{idate}_daily.nc')
+    if os.path.exists(cache):
+        print(f"  Loading {exp_prefix}_{idate} from cache...")
+        return xr.open_dataarray(cache)
+
+    print(f"  Computing {exp_prefix}_{idate}...")
+    raw, time = readmit_raw(f'{exp_prefix}{idate}')
+    if raw is None:
+        return None
+
+    # Take surface level only
+    raw = raw[:, 0:1]                           # (nt, 1, ntile, nj, ni)
+    val, lon, lat = llc2grd(raw, nz=1)          # (nt, nlat, nlon)
+
+    da = xr.DataArray(val, coords={"time": time, "lat": lat, "lon": lon},
+                      dims=["time", "lat", "lon"])
+    da = da.resample(time='1D').mean()          # daily means
+    da.to_netcdf(cache)
+    print(f"  Cached to {cache}")
+    return da
+
+
+# ==========================================
+# Main: Load data and compute biases
+# ==========================================
+print("Loading ECCO THETA...")
+theta = load_ecco_theta()
+print(f"THETA shape: {theta.shape},  time: {theta.time.values[[0,-1]]}")
+
+BME_list = []
+BRP_list = []
+
 for idate in init_dates:
-    me = get_model_data('GEOSMIT_ME', idate)
-    rp = get_model_data('GEOSMIT_RP', idate)
-    
-    if me is not None and rp is not None:
-        # We need to make sure the timestamps align, or we drop the xarray coords and just subtract the values.
-        # Since they are both resampled to '1D', we can just take the values if we know they are same length.
-        # However, to be safe, let's crop both to the exact requested date range.
-        me_slice = me.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
-        rp_slice = rp.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
-        theta_slice_loc = theta.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
-        
-        # In case the exact daily timestamps are slightly off natively, we extract the identical overlap period
-        # and assign me_slice's time coordinate to theta so xarray doesn't fill with NaNs on subtraction.
-        t_len = min(len(me_slice), len(theta_slice_loc))
-        print(f"[{idate}] me_slice shape: {me_slice.shape}, theta_slice_loc shape: {theta_slice_loc.shape}, t_len used: {t_len}")
-        
-        bme = me_slice[:t_len].copy()
-        brp = rp_slice[:t_len].copy()
-        
-        bme.values = me_slice.values[:t_len] - theta_slice_loc.values[:t_len]
-        brp.values = rp_slice.values[:t_len] - theta_slice_loc.values[:t_len]
-        
-        bme_list.append(bme)
-        brp_list.append(brp)
+    print(f"\n=== Init date {idate} ===")
+    me = load_model_daily('GEOSMIT_ME', idate)
+    rp = load_model_daily('GEOSMIT_RP', idate)
+    if me is None or rp is None:
+        print(f"  Skipping {idate}")
+        continue
 
-if len(bme_list) == 3:
-    BME = (bme_list[0] + bme_list[1] + bme_list[2]) / 3.0
-    BRP = (brp_list[0] + brp_list[1] + brp_list[2]) / 3.0
-    
-    BME[0,:,:] = 0
-    
-    # Calculate absolute differences for plots
-    # We will slice time, taking mean over time, and then compute |BME| - |BRP|
-    def calc_plot_data(time_slice):
-        mean_bme = np.abs(BME.sel(time=time_slice).mean(dim='time'))
-        mean_brp = np.abs(BRP.sel(time=time_slice).mean(dim='time'))
-        return mean_bme - mean_brp
+    t0, t1 = theta_slices[idate]
+    theta_np = theta.sel(time=slice(t0, t1)).values    # numpy (nt_th, nlat, nlon)
+    me_np    = me.values                               # numpy (nt_me, nlat, nlon)
+    rp_np    = rp.values
 
-    w1 = calc_plot_data(slice('2005-05-01', '2005-05-07'))
-    w2 = calc_plot_data(slice('2005-05-08', '2005-05-14'))
-    w34 = calc_plot_data(slice('2005-05-15', '2005-05-30'))
-    w58 = calc_plot_data(slice('2005-06-01', '2005-06-30'))
-    
-    print(f"w1 shape: {w1.shape}, min: {np.nanmin(w1.values)}, max: {np.nanmax(w1.values)}")
-    print(f"w2 shape: {w2.shape}, min: {np.nanmin(w2.values)}, max: {np.nanmax(w2.values)}")
-    print(f"w34 shape: {w34.shape}, min: {np.nanmin(w34.values)}, max: {np.nanmax(w34.values)}")
-    
-    print("\nGenerating Robinson projection plots...")
+    t_len = min(len(me_np), len(theta_np))
+    print(f"  me: {me_np.shape}, theta: {theta_np.shape}, using t_len={t_len}")
 
-    proj = ccrs.Robinson(central_longitude=180)
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10), subplot_kw={'projection': proj})
+    # NOTEBOOK-STYLE: positional numpy subtraction
+    bme = me_np[:t_len] - theta_np[:t_len]             # (t_len, nlat, nlon)
+    brp = rp_np[:t_len] - theta_np[:t_len]
 
-    def format_axis(ax, title):
-        ax.set_global()
-        ax.coastlines(linewidth=0.5, alpha=0.6)
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_extent([-180, 180, -60, 85], crs=ccrs.PlateCarree())
+    # Wrap back in xr.DataArray re-using me's time coords for time slicing later
+    me_time = me.time.values[:t_len]
+    bme_da = xr.DataArray(bme, coords={"time": me_time, "lat": me.lat, "lon": me.lon},
+                          dims=["time", "lat", "lon"])
+    brp_da = xr.DataArray(brp, coords={"time": me_time, "lat": rp.lat, "lon": rp.lon},
+                          dims=["time", "lat", "lon"])
 
-    # Levels and colormap matching the original script preference
-    # The previous instruction removed: clf=arange(-.9,.91,.2)
-    # The original script for Week 1 had clf=arange(-.9,.91,.2)
-    # The user asked in previous conversation:
-    # "change the closeeness oclorbar, add text in the colorbar to say which color means which one is better"
-    # "also make closeness plot to -5 to 5 with 1 spacing, but whiting between -1 to 1."
-    # Wait, the user's latest instruction for this script says:
-    # "just read the eccobias ipynb script, and recreate it everything same, except the plotting should use robinson map. again,m keep everything ekse same."
-    # Let me use the PiYG setup they liked for closeness, but adapted for the values here. Or just use what they had in ECCO_bias.ipynb: RdBu_r ?
-    # BME closeness was Blue, IAU closer was Red in the title "Week 1 closeness (Blue: ME Closer, Red: IAU closer)"
-    # That means blue is negative, red is positive.
-    
-    levels = np.arange(-0.9, 0.91, 0.2)
-    # Using RdBu_r => Blue for negative, Red for positive
-    cmap = 'RdBu_r'
+    BME_list.append(bme_da)
+    BRP_list.append(brp_da)
 
-    def plot_panel(ax, da, title):
-        format_axis(ax, title)
-        da_cyc, lon_cyc = add_cyclic_point(da, coord=da.lon)
-        p = ax.contourf(lon_cyc, da.lat, da_cyc, transform=ccrs.PlateCarree(),
-                        levels=levels, cmap=cmap, extend='both')
-        return p
+if len(BME_list) == 0:
+    print("No valid data. Exiting.")
+    exit(1)
 
-    p1 = plot_panel(axes[0, 0], w1, 'Week 1 closeness (Blue: ME Closer, Red: IAU closer)')
-    p2 = plot_panel(axes[0, 1], w2, 'Week 2 closeness (Blue: ME Closer, Red: IAU closer)')
-    p3 = plot_panel(axes[1, 0], w34, 'Week 3-4 closeness (Blue: ME Closer, Red: IAU closer)')
-    p4 = plot_panel(axes[1, 1], w58, 'Week 5-8 closeness (Blue: ME Closer, Red: IAU closer)')
+# Ensemble mean: average over available members (positional, sharing the same time axis)
+# Note: different members may have different nt; take the minimum
+min_t = min(len(b.time) for b in BME_list)
+BME = sum(b.isel(time=slice(None, min_t)) for b in BME_list) / len(BME_list)
+BRP = sum(b.isel(time=slice(None, min_t)) for b in BRP_list) / len(BRP_list)
 
-    fig.subplots_adjust(right=0.85, wspace=0.1, hspace=0.2)
-    cbar_ax = fig.add_axes([0.88, 0.25, 0.02, 0.5])
-    cbar = fig.colorbar(p1, cax=cbar_ax, ticks=levels)
-    cbar.set_label('Theta Bias Closeness')
+# Apply same first-timestep zeroing as notebook: BME[0,:,:] = 0
+BME[0] = 0.0
 
-    output_filename = 'theta_closeness.png'
-    plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-    print(f"Plot saved successfully to {output_filename}")
-    
-else:
-    print("Missing data for 3 ensembles.")
+print(f"\nBME shape: {BME.shape}, time: {BME.time.values[[0,-1]]}")
+print(f"BRP shape: {BRP.shape}")
+
+# ==========================================
+# Closeness per week  |BME| - |BRP|
+# ==========================================
+def closeness(t0, t1):
+    a = np.abs(BME.sel(time=slice(t0, t1))).mean(dim='time')
+    b = np.abs(BRP.sel(time=slice(t0, t1))).mean(dim='time')
+    return a - b
+
+w1  = closeness('2005-05-01', '2005-05-07')
+w2  = closeness('2005-05-08', '2005-05-14')
+w34 = closeness('2005-05-15', '2005-05-30')
+w58 = closeness('2005-06-01', '2005-06-30')
+
+for name, arr in [('w1',w1),('w2',w2),('w34',w34),('w58',w58)]:
+    print(f"{name}: min={np.nanmin(arr.values):.3f}  max={np.nanmax(arr.values):.3f}")
+
+# ==========================================
+# Plotting – Robinson projection
+# ==========================================
+print("\nGenerating Robinson projection plots...")
+
+levels = np.arange(-0.9, 0.91, 0.2)
+cmap   = 'RdBu_r'   # Blue = ME closer, Red = IAU closer
+
+proj = ccrs.Robinson(central_longitude=180)
+fig, axes = plt.subplots(2, 2, figsize=(16, 10), subplot_kw={'projection': proj})
+
+titles = [
+    'Week 1 closeness (Blue: ME Closer, Red: IAU closer)',
+    'Week 2 closeness (Blue: ME Closer, Red: IAU closer)',
+    'Week 3-4 closeness (Blue: ME Closer, Red: IAU closer)',
+    'Week 5-8 closeness (Blue: ME Closer, Red: IAU closer)',
+]
+datasets = [w1, w2, w34, w58]
+
+plots = []
+for ax, da, title in zip(axes.flat, datasets, titles):
+    ax.set_global()
+    ax.coastlines(linewidth=0.5, alpha=0.6)
+    ax.set_title(title, fontsize=11, fontweight='bold')
+    da_cyc, lon_cyc = add_cyclic_point(da, coord=da.lon)
+    p = ax.contourf(lon_cyc, da.lat, da_cyc,
+                    transform=ccrs.PlateCarree(),
+                    levels=levels, cmap=cmap, extend='both')
+    plots.append(p)
+
+fig.subplots_adjust(right=0.85, wspace=0.05, hspace=0.15)
+cbar_ax = fig.add_axes([0.88, 0.2, 0.02, 0.6])
+cbar = fig.colorbar(plots[0], cax=cbar_ax, ticks=levels)
+cbar.set_label('°C  (Blue: ME closer to ECCO | Red: IAU closer to ECCO)')
+
+out = 'theta_closeness.png'
+plt.savefig(out, dpi=300, bbox_inches='tight')
+print(f"Saved: {out}")
