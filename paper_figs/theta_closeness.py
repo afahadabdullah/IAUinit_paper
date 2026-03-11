@@ -160,17 +160,23 @@ for idate in init_dates:
     rp = get_model_data('GEOSMIT_RP', idate)
     
     if me is not None and rp is not None:
-        theta_slice = theta.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
+        # We need to make sure the timestamps align, or we drop the xarray coords and just subtract the values.
+        # Since they are both resampled to '1D', we can just take the values if we know they are same length.
+        # However, to be safe, let's crop both to the exact requested date range.
+        me_slice = me.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
+        rp_slice = rp.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
+        theta_slice_loc = theta.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
         
-        # truncate/align array dimensions if needed
-        t_len = min(len(me), len(theta_slice))
-        print(f"[{idate}] me shape: {me.shape}, theta_slice shape: {theta_slice.shape}, t_len used: {t_len}")
+        # In case the exact daily timestamps are slightly off natively, we extract the identical overlap period
+        # and assign me_slice's time coordinate to theta so xarray doesn't fill with NaNs on subtraction.
+        t_len = min(len(me_slice), len(theta_slice_loc))
+        print(f"[{idate}] me_slice shape: {me_slice.shape}, theta_slice_loc shape: {theta_slice_loc.shape}, t_len used: {t_len}")
         
-        bme = me.copy()
-        bme.values[:t_len] = me.values[:t_len] - theta_slice.values[:t_len]
+        bme = me_slice[:t_len].copy()
+        brp = rp_slice[:t_len].copy()
         
-        brp = rp.copy()
-        brp.values[:t_len] = rp.values[:t_len] - theta_slice.values[:t_len]
+        bme.values = me_slice.values[:t_len] - theta_slice_loc.values[:t_len]
+        brp.values = rp_slice.values[:t_len] - theta_slice_loc.values[:t_len]
         
         bme_list.append(bme)
         brp_list.append(brp)
