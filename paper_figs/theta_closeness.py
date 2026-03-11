@@ -160,10 +160,11 @@ for idate in init_dates:
     rp = get_model_data('GEOSMIT_RP', idate)
     
     if me is not None and rp is not None:
-        theta_slice = theta.sel(time=idate_to_slice[idate])
+        theta_slice = theta.sel(time=slice(idate_to_slice[idate].start, idate_to_slice[idate].stop))
         
         # truncate/align array dimensions if needed
         t_len = min(len(me), len(theta_slice))
+        print(f"[{idate}] me shape: {me.shape}, theta_slice shape: {theta_slice.shape}, t_len used: {t_len}")
         
         bme = me.copy()
         bme.values[:t_len] = me.values[:t_len] - theta_slice.values[:t_len]
@@ -191,6 +192,10 @@ if len(bme_list) == 3:
     w2 = calc_plot_data(slice('2005-05-08', '2005-05-14'))
     w34 = calc_plot_data(slice('2005-05-15', '2005-05-30'))
     w58 = calc_plot_data(slice('2005-06-01', '2005-06-30'))
+    
+    print(f"w1 shape: {w1.shape}, min: {np.nanmin(w1.values)}, max: {np.nanmax(w1.values)}")
+    print(f"w2 shape: {w2.shape}, min: {np.nanmin(w2.values)}, max: {np.nanmax(w2.values)}")
+    print(f"w34 shape: {w34.shape}, min: {np.nanmin(w34.values)}, max: {np.nanmax(w34.values)}")
     
     print("\nGenerating Robinson projection plots...")
 
