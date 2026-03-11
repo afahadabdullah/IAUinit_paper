@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # ==========================================
 # Paths and Configuration
 # ==========================================
-EXP_LOC     = '/nobackupp27/afahad/exp/IAU_exp/'
+EXP_LOC     = '/nobackupp27/afahad/exp/'   # original notebook loc — MIT ocean binaries live here
 INPUT_DIR   = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
 ECCO_THETA_DIR = '/nobackupp27/afahad/exp/script_replay_AGU/data/ecco/'
 
