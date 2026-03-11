@@ -24,7 +24,7 @@ if not os.path.exists(cache_dir):
     os.makedirs(cache_dir)
     print(f"Created cache directory: {cache_dir}")
 
-def readmit(exp='GEOSMIT35_ctrl', loc='/nobackupp27/afahad/exp/', var=1, start_date='20050501', nfiles=120, freq='12H', nz=50, nf=6, ni=90, nj=90, ntile=13, expdir_suffix='../mit_output/'):
+def readmit(exp='GEOSMIT35_ctrl', loc='/nobackupp27/afahad/exp/IAU_exp/', var=1, start_date='20050501', nfiles=120, freq='12H', nz=50, nf=6, ni=90, nj=90, ntile=13, expdir_suffix='../mit_output/'):
     input_dir = '/nobackupp27/afahad/GEOSMITgcmFiles/mit_input_llc90_02'
     
     # Resolve the plot dir and mit_output dir using the exp loc
