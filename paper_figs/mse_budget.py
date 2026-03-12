@@ -140,16 +140,27 @@ def compute_mse_budget(f_prog, f_surf, name):
     H = state3d["H"]
     Phi = g * H  
 
-    # Column MSE (J/m^2)
-    h = cp*T + Lv*q + Phi
-    col_h = (h * dp / g).sum(lev_dim)
+    # Column MSE (J/m^2), DSE, and Latent
+    s_dry = cp*T + Phi
+    q_lat = Lv*q
+    h = s_dry + q_lat
 
-    # dMSEdt (W/m^2)
+    col_h = (h * dp / g).sum(lev_dim)
+    col_s = (s_dry * dp / g).sum(lev_dim)
+    col_L = (q_lat * dp / g).sum(lev_dim)
+
+    # dMSEdt, dDSEdt, dLatentdt (W/m^2)
     time = col_h["time"]
     # Calculate dt in seconds correctly to avoid nanosecond scaling issues
     dt_delta = (time.shift(time=-1) - time)
     dt_sec = dt_delta.dt.total_seconds()
-    dMSEdt = (col_h.shift(time=-1) - col_h.shift(time=+1)) / (2.0*dt_sec)
+
+    def get_tendency(da):
+        return (da.shift(time=-1) - da.shift(time=+1)) / (2.0*dt_sec)
+
+    dMSEdt    = get_tendency(col_h)
+    dDSEdt    = get_tendency(col_s)
+    dLatentdt = get_tendency(col_L)
 
     # Radiation terms
     SWTNET = flux2d["SWTNET"]     
@@ -197,6 +208,8 @@ def compute_mse_budget(f_prog, f_surf, name):
 
     pt_series = xr.Dataset({
         "dMSEdt": dMSEdt.sel(**pt_sel),
+        "dDSEdt": dDSEdt.sel(**pt_sel),
+        "dLatentdt": dLatentdt.sel(**pt_sel),
         "Hnet": Hnet.sel(**pt_sel),
         "Precip": Precip.sel(**pt_sel),
         "MSE_export": MSE_export.sel(**pt_sel)
@@ -208,6 +221,8 @@ def compute_mse_budget(f_prog, f_surf, name):
 
     series = xr.Dataset({
         "dMSEdt": box_mean(dMSEdt),
+        "dDSEdt": box_mean(dDSEdt),
+        "dLatentdt": box_mean(dLatentdt),
         "Hnet": box_mean(Hnet),
         "Precip": box_mean(Precip),
         "MSE_export": box_mean(MSE_export),
@@ -233,12 +248,12 @@ if __name__ == '__main__':
     time_rp = rp_pt.time.values
     time_me = me_pt.time.values
 
-    # Setup the plot - 4 Panels
-    fig, axes = plt.subplots(4, 1, figsize=(14, 14), sharex=True)
+    # Setup the plot - 6 Panels
+    fig, axes = plt.subplots(6, 1, figsize=(14, 20), sharex=True)
     fig.subplots_adjust(hspace=0.25)
     
     # Titles
-    fig.suptitle(f'MSE Budget & Precipitation at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
+    fig.suptitle(f'MSE Components & Budget at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
 
     # 1. dMSE/dt
     axes[0].plot(time_me, me_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
@@ -248,26 +263,40 @@ if __name__ == '__main__':
     axes[0].legend(loc='upper right', fontsize=12)
     axes[0].set_title('Column Moist Static Energy Tendency', fontsize=14)
 
-    # 2. Net column heating (Hnet)
-    axes[1].plot(time_me, me_pt['Hnet'], color='blue', linewidth=2.5)
-    axes[1].plot(time_rp, rp_pt['Hnet'], color='darkorange', linewidth=2.5)
+    # 2. dDSE/dt
+    axes[1].plot(time_me, me_pt['dDSEdt'], color='blue', linewidth=2.5)
+    axes[1].plot(time_rp, rp_pt['dDSEdt'], color='darkorange', linewidth=2.5)
     axes[1].axhline(0, color='gray', linestyle='--', alpha=0.7)
-    axes[1].set_ylabel(r'$Q_{net}$ ($H_{net}$) [W $m^{-2}$]', fontsize=14)
-    axes[1].set_title('Net Moist Forcing (Radiation + Turbulent Fluxes)', fontsize=14)
+    axes[1].set_ylabel(r'$\partial\langle s \rangle/\partial t$ [W $m^{-2}$]', fontsize=14)
+    axes[1].set_title('Column Dry Static Energy Tendency (Heating)', fontsize=14)
 
-    # 3. Precipitation Energy Equivalent
-    axes[2].plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5)
-    axes[2].plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5)
-    axes[2].set_ylabel(r'$L_v P$ [W $m^{-2}$]', fontsize=14)
-    axes[2].set_title('Internal Energy Transformation: Precipitation ($L_v \times P$)', fontsize=14)
+    # 3. dLatent/dt
+    axes[2].plot(time_me, me_pt['dLatentdt'], color='blue', linewidth=2.5)
+    axes[2].plot(time_rp, rp_pt['dLatentdt'], color='darkorange', linewidth=2.5)
+    axes[2].axhline(0, color='gray', linestyle='--', alpha=0.7)
+    axes[2].set_ylabel(r'$\partial\langle L_v q \rangle/\partial t$ [W $m^{-2}$]', fontsize=14)
+    axes[2].set_title('Column Latent Energy Tendency (Moisture)', fontsize=14)
 
-    # 4. Apparent MSE Export
-    axes[3].plot(time_me, me_pt['MSE_export'], color='blue', linewidth=2.5)
-    axes[3].plot(time_rp, rp_pt['MSE_export'], color='darkorange', linewidth=2.5)
-    axes[3].axhline(0, color='gray', linestyle='--', alpha=0.7)
-    axes[3].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
-    axes[3].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
-    axes[3].tick_params(axis='x', labelsize=12)
+    # 4. Precipitation Energy Equivalent
+    axes[3].plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5)
+    axes[3].plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5)
+    axes[3].set_ylabel(r'$L_v P$ [W $m^{-2}$]', fontsize=14)
+    axes[3].set_title('Precipitation energy transformation ($L_v \times P$)', fontsize=14)
+
+    # 5. Net column heating (Hnet)
+    axes[4].plot(time_me, me_pt['Hnet'], color='blue', linewidth=2.5)
+    axes[4].plot(time_rp, rp_pt['Hnet'], color='darkorange', linewidth=2.5)
+    axes[4].axhline(0, color='gray', linestyle='--', alpha=0.7)
+    axes[4].set_ylabel(r'$H_{net}$ [W $m^{-2}$]', fontsize=14)
+    axes[4].set_title('Net Moist Forcing (Radiation + Turbulent Fluxes)', fontsize=14)
+
+    # 6. Apparent MSE Export
+    axes[5].plot(time_me, me_pt['MSE_export'], color='blue', linewidth=2.5)
+    axes[5].plot(time_rp, rp_pt['MSE_export'], color='darkorange', linewidth=2.5)
+    axes[5].axhline(0, color='gray', linestyle='--', alpha=0.7)
+    axes[5].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
+    axes[5].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
+    axes[5].tick_params(axis='x', labelsize=12)
 
     for ax in axes:
         ax.grid(True, linestyle=':', alpha=0.6)
