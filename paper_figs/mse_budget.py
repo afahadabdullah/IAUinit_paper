@@ -134,7 +134,8 @@ def compute_mse_budget(f_prog, f_surf, name):
     flux2d = flux2d.reindex(time=state3d.time, method='nearest')
     
     # Merge for easier coordinate handling
-    ds = xr.merge([state3d, flux2d], join='inner').dropna(dim='time')
+    # Use compat='override' to ignore minor differences in static fields like PHIS
+    ds = xr.merge([state3d, flux2d], join='inner', compat='override').dropna(dim='time')
     
     state3d = ds
     flux2d  = ds
