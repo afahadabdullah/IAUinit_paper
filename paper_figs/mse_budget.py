@@ -98,7 +98,8 @@ def ensure_atm_positive(da):
 # MSE Budget Engine
 # ==============================================================================
 def compute_mse_budget(f_prog, f_surf, name):
-    cache_dir = "cache"
+    # CHANGED: Force a new cache directory so it doesn't load buggy past runs
+    cache_dir = "cache_v2" 
     if not os.path.exists(cache_dir): os.makedirs(cache_dir)
     
     pt_file = f"{cache_dir}/{name}_pt.nc"
@@ -211,18 +212,12 @@ def compute_mse_budget(f_prog, f_surf, name):
 
 
 
-    # dMSEdt, dDSEdt, dLatentdt (W/m^2)
-    time = col_h["time"]
-    # Calculate dt in seconds correctly to avoid nanosecond scaling issues
-    dt_delta = (time.shift(time=-1) - time)
-    dt_sec = dt_delta.dt.total_seconds()
-
-    def get_tendency(da):
-        return (da.shift(time=-1) - da.shift(time=+1)) / (2.0*dt_sec)
-
-    dMSEdt    = get_tendency(col_h)
-    dDSEdt    = get_tendency(col_s)
-    dLatentdt = get_tendency(col_L)
+    # ==========================================================================
+    # Native Xarray Differentiation: Handles dt scaling and edge cases automatically
+    # ==========================================================================
+    dMSEdt    = col_h.differentiate('time', datetime_unit='s')
+    dDSEdt    = col_s.differentiate('time', datetime_unit='s')
+    dLatentdt = col_L.differentiate('time', datetime_unit='s')
 
     # Radiation terms
     SWTNET = flux2d["SWTNET"]     
@@ -239,9 +234,9 @@ def compute_mse_budget(f_prog, f_surf, name):
 
     LW_net_sfc = LWS_dn - LWUP_sfc         
     SW_net_sfc = SWGNET                    
-    R_sfc_net  = SW_net_sfc + LW_net_sfc   
-    R_toa_net  = SWTNET - OLR              
-    R_col      = R_toa_net - R_sfc_net     
+    R_net_sfc  = SW_net_sfc + LW_net_sfc   
+    R_net_toa  = SWTNET - OLR              
+    R_col      = R_net_toa - R_net_sfc     
 
     # Turbulent fluxes
     LHF = ensure_atm_positive(flux2d["LHFX"])
@@ -253,7 +248,8 @@ def compute_mse_budget(f_prog, f_surf, name):
     if precip_var:
         Precip = flux2d[precip_var[0]] * Lv
     else:
-        Precip = xr.zeros_like(Hnet) # Placeholder if not found
+        # Fixed NameError: referencing R_col instead of Hnet before initialization
+        Precip = xr.zeros_like(R_col) 
         print("  WARNING: Precipitation variable not found.")
 
     # Heat (DSE) and Moisture (Latent) Budgets
