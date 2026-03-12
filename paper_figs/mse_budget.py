@@ -134,13 +134,13 @@ def compute_mse_budget(f_prog, f_surf, name):
     # 4. Definitive Robust Alignment (Snap-to-6H)
     # GEOS 3D (instantaneous) and 2D (averaged) often have offsets. 
     # Rounding both to 6H and then grouping/averaging is the most robust alignment strategy.
-    print(f"  -> Snapping {name} timestamps to nearest 6H and aligning...")
-    state3d['time'] = state3d.time.dt.round('6H')
-    flux2d['time']  = flux2d.time.dt.round('6H')
+    print(f"  -> Snapping {name} timestamps to nearest 6h and aligning...")
+    state3d['time'] = state3d.time.dt.round('6h')
+    flux2d['time']  = flux2d.time.dt.round('6h')
     
-    # Ensure no duplicates after rounding (take the mean if files overlap)
-    state3d = state3d.groupby('time').mean()
-    flux2d = flux2d.groupby('time').mean()
+    # Ensure no duplicates after rounding (take the mean along 'time' to collapse duplicates)
+    state3d = state3d.groupby('time').mean('time')
+    flux2d = flux2d.groupby('time').mean('time')
     
     # Strictly intersect times
     common_times = np.intersect1d(state3d.time, flux2d.time)
