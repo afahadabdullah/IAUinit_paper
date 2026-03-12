@@ -123,27 +123,40 @@ def compute_mse_budget(f_prog, f_surf, name):
         state3d = state3d.load() 
         flux2d = flux2d.load()
 
-    # 4. Align time axes robustly
-    # We use state3d as the master clock and reindex flux2d to match it.
-    # This handles cases where one dataset might be shifted by a few minutes or hours.
-    flux2d = flux2d.reindex(time=state3d.time, method='nearest')
-    print(f"  -> Aligned surface fluxes to 3D state times ({len(state3d.time)} steps).")
+    # 4. Align & Smooth Data (CRITICAL for Budget Stability)
+    # Resample both to 6H mean to remove 2-step sloshing and align time axes perfectly
+    print("  -> Resampling and aligning to common 6H grid...")
+    state3d = state3d.resample(time='6H').mean()
+    flux2d = flux2d.resample(time='6H').mean()
+    
+    # Strictly intersect to avoid any NaN gaps
+    common_times = np.intersect1d(state3d.time.values, flux2d.time.values)
+    state3d = state3d.sel(time=common_times)
+    flux2d = flux2d.sel(time=common_times)
+    print(f"  -> Aligned to {len(common_times)} common 6H time steps.")
+
 
 
     
     lev_dim = get_lev_dim(state3d)
-    # Check pressure units (Standard GEOS is hPa for 'lev' but Pa for 'DELP')
+    # Check pressure units logic:
+    # GEOS DELP is always in Pa. 'lev' coord is usually hPa.
+    has_delp = any(n in state3d for n in ("DELP","delp","Dp","dP"))
     p_coord = state3d[lev_dim]
-    is_hpa = bool(p_coord.max() > 100 and p_coord.max() < 2000)
-    
+    lev_is_hpa = bool(p_coord.max() > 100 and p_coord.max() < 2000)
+
     dp = build_dp_positional(state3d, flux2d["PS"]).clip(min=0)
-    if is_hpa:
-        print(f"  -> Detected pressure in hPa. Converting to Pa...")
-        dp = dp * 100.0 # Convert to Pa
+    
+    # If we DERIVED dp from 'lev' (no DELP), we might need hPa-to-Pa
+    if not has_delp and lev_is_hpa:
+        print(f"  -> Converting derived dp from hPa to Pa...")
+        dp = dp * 100.0
+    elif has_delp:
+        print(f"  -> Using native vertical pressure thickness (Pa).")
     
     # Mask sub-surface levels: p_mid > PS
     p_mid_vals = state3d[lev_dim].values
-    if is_hpa: p_mid_vals = p_mid_vals * 100.0
+    if lev_is_hpa: p_mid_vals = p_mid_vals * 100.0 # Match PS units (Pa)
     
     p_mid_4d = xr.DataArray(p_mid_vals, dims=(lev_dim,)).broadcast_like(state3d["T"])
     below_ground = p_mid_4d > flux2d["PS"]
@@ -153,7 +166,7 @@ def compute_mse_budget(f_prog, f_surf, name):
     Phi = g * state3d["H"].where(~below_ground)
  
     # Column Integrated Moisture Energy (J/m^2)
-    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
+    # Units: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
     q_lat = Lv*q
     col_L = (q_lat * dp / g).sum(lev_dim, skipna=True) 
     
