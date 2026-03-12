@@ -203,20 +203,20 @@ if __name__ == '__main__':
     print("Initiating IAU MSE Budget...")
     me_pt, me_box = compute_mse_budget(me_prog, me_surf, "IAU-IC")
 
-    # We will plot the Box Means. If you prefer the point series, replace 'rp_box' with 'rp_pt'
-    time_rp = rp_box.time.values
-    time_me = me_box.time.values
+    # We will plot the Point Series as requested by the user
+    time_rp = rp_pt.time.values
+    time_me = me_pt.time.values
 
     # Setup the plot
     fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
-    fig.subplots_adjust(hspace=0.1)
+    fig.subplots_adjust(hspace=0.2)
     
     # Titles
-    fig.suptitle('MSE Budget Comparison: Reanalysis vs IAU Initialization\nWestern Tropical Pacific (140°E-170°E, 15°S-15°N)', fontsize=16)
+    fig.suptitle(f'MSE Budget Comparison at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
 
     # 1. dMSE/dt
-    axes[0].plot(time_rp, rp_box['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
-    axes[0].plot(time_me, me_box['dMSEdt'], color='darkorange', linewidth=2.5, label='IAU IC')
+    axes[0].plot(time_rp, rp_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
+    axes[0].plot(time_me, me_pt['dMSEdt'], color='darkorange', linewidth=2.5, label='IAU IC')
     axes[0].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[0].set_ylabel(r'$\partial\langle h \rangle/\partial t$ [W $m^{-2}$]', fontsize=14)
     axes[0].legend(loc='upper right', fontsize=12)
@@ -224,16 +224,16 @@ if __name__ == '__main__':
     axes[0].tick_params(axis='y', labelsize=12)
 
     # 2. Net column heating (Hnet)
-    axes[1].plot(time_rp, rp_box['Hnet'], color='blue', linewidth=2.5)
-    axes[1].plot(time_me, me_box['Hnet'], color='darkorange', linewidth=2.5)
+    axes[1].plot(time_rp, rp_pt['Hnet'], color='blue', linewidth=2.5)
+    axes[1].plot(time_me, me_pt['Hnet'], color='darkorange', linewidth=2.5)
     axes[1].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[1].set_ylabel(r'$Q_{net}$ ($H_{net}$) [W $m^{-2}$]', fontsize=14)
     axes[1].set_title('Net Moist Forcing (Radiation + Turbulent Fluxes)', fontsize=14)
     axes[1].tick_params(axis='y', labelsize=12)
 
     # 3. Apparent MSE Export
-    axes[2].plot(time_rp, rp_box['MSE_export'], color='blue', linewidth=2.5)
-    axes[2].plot(time_me, me_box['MSE_export'], color='darkorange', linewidth=2.5)
+    axes[2].plot(time_rp, rp_pt['MSE_export'], color='blue', linewidth=2.5)
+    axes[2].plot(time_me, me_pt['MSE_export'], color='darkorange', linewidth=2.5)
     axes[2].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[2].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
     axes[2].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
