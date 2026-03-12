@@ -219,6 +219,7 @@ def compute_mse_budget(f_prog, f_surf, name):
         "dMSEdt": dMSEdt.sel(**pt_sel),
         "dDSEdt": dDSEdt.sel(**pt_sel),
         "dLatentdt": dLatentdt.sel(**pt_sel),
+        "col_L": col_L.sel(**pt_sel),
         "Hnet": Hnet.sel(**pt_sel),
         "Precip": Precip.sel(**pt_sel),
         "DSE_export": DSE_export.sel(**pt_sel),
@@ -234,6 +235,7 @@ def compute_mse_budget(f_prog, f_surf, name):
         "dMSEdt": box_mean(dMSEdt),
         "dDSEdt": box_mean(dDSEdt),
         "dLatentdt": box_mean(dLatentdt),
+        "col_L": box_mean(col_L),
         "Hnet": box_mean(Hnet),
         "Precip": box_mean(Precip),
         "DSE_export": box_mean(DSE_export),
@@ -280,13 +282,14 @@ if __name__ == '__main__':
     ax.set_ylabel(r'$-\nabla \cdot \langle L_v q \mathbf{v} \rangle$ [W $m^{-2}$]', fontsize=13)
     ax.set_title('(b) Moisture Convergence', fontsize=14, loc='left', fontweight='bold')
 
-    # 3. Column Moisture Storage (Tendency) - The "Result"
+    # 3. Column Moisture Reservoir (Total Energy) - The "State"
     ax = axes[2]
-    ax.plot(time_me, me_pt['dLatentdt'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['dLatentdt'], color='darkorange', linewidth=2)
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$\partial\langle L_v q \rangle/\partial t$ [W $m^{-2}$]', fontsize=13)
-    ax.set_title('(c) Column Moisture Storage Tendency', fontsize=14, loc='left', fontweight='bold')
+    ax.plot(time_me, me_pt['col_L'], color='blue', linewidth=2.5)
+    ax.plot(time_rp, rp_pt['col_L'], color='darkorange', linewidth=2.5)
+    ax.set_ylabel(r'$\langle L_v q \rangle$ [10$^8$ J $m^{-2}$]', fontsize=13)
+    # Scale Y-axis for readability if values are large
+    ax.yaxis.get_offset_text().set_size(10)
+    ax.set_title('(c) Column Integrated Moisture Energy', fontsize=14, loc='left', fontweight='bold')
     ax.set_xlabel('Time (May 2005)', fontsize=12)
     
     for a in axes:
