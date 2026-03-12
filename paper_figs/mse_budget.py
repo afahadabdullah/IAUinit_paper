@@ -111,8 +111,10 @@ def compute_mse_budget(f_prog, f_surf, name):
     print(f"Loading {name} data from experiments...")
     # 1. Open lazily and slice time safely with a synchronous scheduler
     with dask.config.set(scheduler='single-threaded'):
-        ds_prog = xr.open_mfdataset(f_prog, parallel=False).sel(time=slice('2005-05-05', '2005-05-14'))
-        ds_surf = xr.open_mfdataset(f_surf, parallel=False).sel(time=slice('2005-05-05', '2005-05-14'))
+        # Expand slice to capture all possible May data before alignment
+        ds_prog = xr.open_mfdataset(f_prog, parallel=False).sel(time=slice('2005-04-30', '2005-05-31'))
+        ds_surf = xr.open_mfdataset(f_surf, parallel=False).sel(time=slice('2005-04-30', '2005-05-31'))
+
 
         # 2. Slice spatially *before* loading into memory or doing heavy math
         state3d = sel_region(ds_prog, LAT_RANGE, LON_RANGE)
@@ -128,24 +130,39 @@ def compute_mse_budget(f_prog, f_surf, name):
     if state3d.time.size == 0 or flux2d.time.size == 0:
         raise ValueError(f"One of the datasets is empty after loading! state3d: {state3d.time.size}, flux2d: {flux2d.time.size}")
 
-    # 4. Robust Alignment and Smoothing (Fixes Sawtooth and 10k Spikes)
-    # First, smooth both to 6H to remove numerical sloshing and align to a common grid
-    print("  -> Smoothing and aligning to common 6H grid...")
-    state3d = state3d.resample(time='6H').mean()
-    flux2d = flux2d.resample(time='6H').mean()
-    print(f"  -> After resample: state3d: {state3d.time.size}, flux2d: {flux2d.time.size}")
+    # 4. Definitive Robust Alignment (Snap-to-6H)
+    # GEOS 3D (instantaneous) and 2D (averaged) often have offsets. 
+    # Rounding both to 6H and then grouping/averaging is the most robust alignment strategy.
+    print(f"  -> Snapping {name} timestamps to nearest 6H and aligning...")
+    state3d['time'] = state3d.time.dt.round('6H')
+    flux2d['time']  = flux2d.time.dt.round('6H')
     
-    # Second, reindex flux2d to match state3d exactly using nearest-neighbor (handles micro-offsets)
-    flux2d = flux2d.reindex(time=state3d.time, method='nearest')
+    # Ensure no duplicates after rounding (take the mean if files overlap)
+    state3d = state3d.groupby('time').mean()
+    flux2d = flux2d.groupby('time').mean()
     
-    # Merge for easier coordinate handling
-    # Use compat='override' to ignore minor differences in static fields like PHIS
-    # We remove dropna(dim='time') temporarily to see if data exists with NaNs
+    # Strictly intersect times
+    common_times = np.intersect1d(state3d.time, flux2d.time)
+    if len(common_times) == 0:
+        print(f"  ERROR: No overlapping 6H windows found for {name}!")
+        print(f"  Prog times: {state3d.time.values[:3]} ... {state3d.time.values[-1]}")
+        print(f"  Surf times: {flux2d.time.values[:3]} ... {flux2d.time.values[-1]}")
+        # Return empty datasets to avoid crashing, lets handle this gracefully in plotting
+        return xr.Dataset(), xr.Dataset()
+
+    state3d = state3d.sel(time=common_times)
+    flux2d  = flux2d.sel(time=common_times)
+    
+    # Synchronize into one dataset
     ds = xr.merge([state3d, flux2d], join='inner', compat='override')
+    
+    # Crop to the focus period for the budget calculation
+    ds = ds.sel(time=slice('2005-05-06', '2005-05-14'))
     
     state3d = ds
     flux2d  = ds
-    print(f"  -> Successfully synchronized {len(ds.time)} budget time steps.")
+    print(f"  -> Successfully synchronized {len(ds.time)} steps for {name} ({ds.time.min().values} to {ds.time.max().values})")
+
 
 
 
@@ -181,14 +198,15 @@ def compute_mse_budget(f_prog, f_surf, name):
     Phi = g * state3d["H"].where(~below_ground)
  
     # Column Integrated Moisture Energy (J/m^2)
-    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
+    # Skipna=True is safe because we masked below-ground. It prevents small NaNs from localized masking differences.
     q_lat = Lv*q
-    col_L = (q_lat * dp / g).sum(lev_dim, skipna=False) 
+    col_L = (q_lat * dp / g).sum(lev_dim, skipna=True) 
     
     # Dry Static Energy and total MSE
     s_dry = cp*T + Phi
-    col_s = (s_dry * dp / g).sum(lev_dim, skipna=False)
+    col_s = (s_dry * dp / g).sum(lev_dim, skipna=True)
     col_h = col_s + col_L
+
 
 
 
