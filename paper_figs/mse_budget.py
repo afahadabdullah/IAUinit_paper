@@ -119,24 +119,27 @@ def compute_mse_budget(f_prog, f_surf, name):
         flux2d  = sel_region(ds_surf, LAT_RANGE, LON_RANGE)
 
         # 3. Load the small subset into memory for fast processing
+        # This prevents HDF5 concurrency issues during complex operations like resampling/merging
         print(f"  -> Loading spatial subset into memory...")
-    # 4. Robust Time Alignment (Fixes Sawtooth/Gaps)
-    # GEOS files often have small millisecond offsets. Rounding ensures they 'snap' together.
-    state3d['time'] = state3d.time.dt.round('1min')
-    flux2d['time']  = flux2d.time.dt.round('1min')
+        state3d = state3d.load() 
+        flux2d = flux2d.load()
+
+    # 4. Robust Alignment and Smoothing (Fixes Sawtooth and 10k Spikes)
+    # First, smooth both to 6H to remove numerical sloshing and align to a common grid
+    print("  -> Smoothing and aligning to common 6H grid...")
+    state3d = state3d.resample(time='6H').mean()
+    flux2d = flux2d.resample(time='6H').mean()
     
-    # Merge into a single dataset with inner join to drop any unmatched time steps
-    print("  -> Merging 3D and Surface datasets with time-snapping...")
-    ds = xr.merge([state3d, flux2d], join='inner')
+    # Second, reindex flux2d to match state3d exactly using nearest-neighbor (handles micro-offsets)
+    flux2d = flux2d.reindex(time=state3d.time, method='nearest')
     
-    # 5. Smooth to 6H for budget stability (removes numerical 2-step sloshing)
-    print("  -> Resampling to 6H mean for manuscript-quality smoothness...")
-    ds = ds.resample(time='6H').mean().dropna(dim='time')
+    # Merge for easier coordinate handling
+    ds = xr.merge([state3d, flux2d], join='inner').dropna(dim='time')
     
-    # Extract aligned variables
     state3d = ds
-    flux2d  = ds 
-    print(f"  -> Successfully aligned to {len(ds.time)} continuous 6H steps.")
+    flux2d  = ds
+    print(f"  -> Successfully synchronized {len(ds.time)} budget time steps.")
+
 
 
 
@@ -170,14 +173,15 @@ def compute_mse_budget(f_prog, f_surf, name):
     Phi = g * state3d["H"].where(~below_ground)
  
     # Column Integrated Moisture Energy (J/m^2)
-    # Units: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
+    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
     q_lat = Lv*q
-    col_L = (q_lat * dp / g).sum(lev_dim, skipna=True) 
+    col_L = (q_lat * dp / g).sum(lev_dim, skipna=False) 
     
     # Dry Static Energy and total MSE
     s_dry = cp*T + Phi
-    col_s = (s_dry * dp / g).sum(lev_dim, skipna=True)
+    col_s = (s_dry * dp / g).sum(lev_dim, skipna=False)
     col_h = col_s + col_L
+
 
 
 
