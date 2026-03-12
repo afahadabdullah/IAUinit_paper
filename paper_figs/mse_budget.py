@@ -163,6 +163,15 @@ def compute_mse_budget(f_prog, f_surf, name):
     LHF = ensure_atm_positive(flux2d["LHFX"])
     SHF = ensure_atm_positive(flux2d["SHFX"])
 
+    # Precipitation (W/m^2)
+    # Common GEOS names: PRECTOT, TPREC. Multiply by Lv (J/kg) to get energy flux
+    precip_var = [n for n in ("PRECTOT","TPREC","precip") if n in flux2d.variables]
+    if precip_var:
+        Precip = flux2d[precip_var[0]] * Lv
+    else:
+        Precip = xr.zeros_like(Hnet) # Placeholder if not found
+        print("  WARNING: Precipitation variable not found.")
+
     # Final terms
     Hnet = R_col + LHF + SHF
     MSE_export = Hnet - dMSEdt
@@ -178,6 +187,7 @@ def compute_mse_budget(f_prog, f_surf, name):
     pt_series = xr.Dataset({
         "dMSEdt": dMSEdt.sel(**pt_sel),
         "Hnet": Hnet.sel(**pt_sel),
+        "Precip": Precip.sel(**pt_sel),
         "MSE_export": MSE_export.sel(**pt_sel)
     })
 
@@ -188,6 +198,7 @@ def compute_mse_budget(f_prog, f_surf, name):
     series = xr.Dataset({
         "dMSEdt": box_mean(dMSEdt),
         "Hnet": box_mean(Hnet),
+        "Precip": box_mean(Precip),
         "MSE_export": box_mean(MSE_export),
     })
 
@@ -207,12 +218,12 @@ if __name__ == '__main__':
     time_rp = rp_pt.time.values
     time_me = me_pt.time.values
 
-    # Setup the plot
-    fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
-    fig.subplots_adjust(hspace=0.2)
+    # Setup the plot - 4 Panels
+    fig, axes = plt.subplots(4, 1, figsize=(14, 14), sharex=True)
+    fig.subplots_adjust(hspace=0.25)
     
     # Titles
-    fig.suptitle(f'MSE Budget Comparison at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
+    fig.suptitle(f'MSE Budget & Precipitation at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
 
     # 1. dMSE/dt
     axes[0].plot(time_rp, rp_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
@@ -221,7 +232,6 @@ if __name__ == '__main__':
     axes[0].set_ylabel(r'$\partial\langle h \rangle/\partial t$ [W $m^{-2}$]', fontsize=14)
     axes[0].legend(loc='upper right', fontsize=12)
     axes[0].set_title('Column Moist Static Energy Tendency', fontsize=14)
-    axes[0].tick_params(axis='y', labelsize=12)
 
     # 2. Net column heating (Hnet)
     axes[1].plot(time_rp, rp_pt['Hnet'], color='blue', linewidth=2.5)
@@ -229,16 +239,20 @@ if __name__ == '__main__':
     axes[1].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[1].set_ylabel(r'$Q_{net}$ ($H_{net}$) [W $m^{-2}$]', fontsize=14)
     axes[1].set_title('Net Moist Forcing (Radiation + Turbulent Fluxes)', fontsize=14)
-    axes[1].tick_params(axis='y', labelsize=12)
 
-    # 3. Apparent MSE Export
-    axes[2].plot(time_rp, rp_pt['MSE_export'], color='blue', linewidth=2.5)
-    axes[2].plot(time_me, me_pt['MSE_export'], color='darkorange', linewidth=2.5)
-    axes[2].axhline(0, color='gray', linestyle='--', alpha=0.7)
-    axes[2].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
-    axes[2].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
-    axes[2].tick_params(axis='y', labelsize=12)
-    axes[2].tick_params(axis='x', labelsize=12)
+    # 3. Precipitation Energy Equivalent
+    axes[2].plot(time_rp, rp_pt['Precip'], color='blue', linewidth=2.5)
+    axes[2].plot(time_me, me_pt['Precip'], color='darkorange', linewidth=2.5)
+    axes[2].set_ylabel(r'$L_v P$ [W $m^{-2}$]', fontsize=14)
+    axes[2].set_title('Internal Energy Transformation: Precipitation ($L_v \times P$)', fontsize=14)
+
+    # 4. Apparent MSE Export
+    axes[3].plot(time_rp, rp_pt['MSE_export'], color='blue', linewidth=2.5)
+    axes[3].plot(time_me, me_pt['MSE_export'], color='darkorange', linewidth=2.5)
+    axes[3].axhline(0, color='gray', linestyle='--', alpha=0.7)
+    axes[3].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
+    axes[3].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
+    axes[3].tick_params(axis='x', labelsize=12)
 
     for ax in axes:
         ax.grid(True, linestyle=':', alpha=0.6)
