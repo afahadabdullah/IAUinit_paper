@@ -123,23 +123,30 @@ def compute_mse_budget(f_prog, f_surf, name):
         print(f"  -> Loading spatial subset into memory...")
         state3d = state3d.load() 
         flux2d = flux2d.load()
+        print(f"  -> Loaded state3d: {state3d.time.size} steps, flux2d: {flux2d.time.size} steps")
+
+    if state3d.time.size == 0 or flux2d.time.size == 0:
+        raise ValueError(f"One of the datasets is empty after loading! state3d: {state3d.time.size}, flux2d: {flux2d.time.size}")
 
     # 4. Robust Alignment and Smoothing (Fixes Sawtooth and 10k Spikes)
     # First, smooth both to 6H to remove numerical sloshing and align to a common grid
     print("  -> Smoothing and aligning to common 6H grid...")
     state3d = state3d.resample(time='6H').mean()
     flux2d = flux2d.resample(time='6H').mean()
+    print(f"  -> After resample: state3d: {state3d.time.size}, flux2d: {flux2d.time.size}")
     
     # Second, reindex flux2d to match state3d exactly using nearest-neighbor (handles micro-offsets)
     flux2d = flux2d.reindex(time=state3d.time, method='nearest')
     
     # Merge for easier coordinate handling
     # Use compat='override' to ignore minor differences in static fields like PHIS
-    ds = xr.merge([state3d, flux2d], join='inner', compat='override').dropna(dim='time')
+    # We remove dropna(dim='time') temporarily to see if data exists with NaNs
+    ds = xr.merge([state3d, flux2d], join='inner', compat='override')
     
     state3d = ds
     flux2d  = ds
     print(f"  -> Successfully synchronized {len(ds.time)} budget time steps.")
+
 
 
 
