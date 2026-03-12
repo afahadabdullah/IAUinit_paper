@@ -97,16 +97,22 @@ def ensure_atm_positive(da):
 # ==============================================================================
 def compute_mse_budget(f_prog, f_surf, name):
     print(f"Loading {name} data...")
+    # 1. Open lazily and slice time
     ds_prog = xr.open_mfdataset(f_prog).sel(time=slice('2005-05-05', '2005-05-14'))
     ds_surf = xr.open_mfdataset(f_surf).sel(time=slice('2005-05-05', '2005-05-14'))
 
-    ds_surf = ds_surf.resample(time='6H').mean()
-    ds_surf = ds_surf.sel(time=ds_prog.time)
-
+    # 2. Slice spatially *before* loading into memory or doing heavy math
     state3d = sel_region(ds_prog, LAT_RANGE, LON_RANGE)
     flux2d  = sel_region(ds_surf, LAT_RANGE, LON_RANGE)
-    state3d = state3d.load() # Load to memory for faster processing
+
+    # 3. Load the small subset into memory for fast processing
+    print(f"  -> Loading spatial subset into memory...")
+    state3d = state3d.load() 
     flux2d = flux2d.load()
+
+    # 4. Resample surface fluxes to match 3D state (which is usually every 6H)
+    flux2d = flux2d.resample(time='6H').mean()
+    flux2d = flux2d.sel(time=state3d.time)
     
     lev_dim = get_lev_dim(state3d)
     dp = build_dp_positional(state3d, flux2d["PS"]).clip(min=0)
