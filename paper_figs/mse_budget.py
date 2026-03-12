@@ -259,15 +259,11 @@ if __name__ == '__main__':
 
     # We will plot the Point Series as requested by the user
     time_rp = rp_pt.time.values
-    time_me = me_pt.time.values
-    # Setup the plot - 3 Panels for the Manuscript (Fuel, Fire, Exhaust)
+    # Setup the plot - 3 Panels: Moisture Budget Story
     fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
     fig.subplots_adjust(hspace=0.25)
     
-    # Clean titles for publication
-    # fig.suptitle(f'Initialization Shock Diagnosis (Lon={PT_LON}°, Lat={PT_LAT}°)', fontsize=16)
-
-    # 1. Fire: Precipitation Heating (Lv*P)
+    # 1. Precipitation Heating (Lv*P) - The "Sink"
     ax = axes[0]
     ax.plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5, label='Reanalysis IC')
     ax.plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5, label='IAU IC')
@@ -275,8 +271,7 @@ if __name__ == '__main__':
     ax.legend(loc='upper right', fontsize=11)
     ax.set_title('(a) Precipitation Heating', fontsize=14, loc='left', fontweight='bold')
 
-    # 2. Fuel: Moisture Convergence (-Latent Export)
-    # Expert tip: Plot -Export so convergence is positive
+    # 2. Moisture Convergence (-Latent Export) - The "Source"
     ax = axes[1]
     ax.plot(time_me, -me_pt['Latent_export'], color='blue', linewidth=2)
     ax.plot(time_rp, -rp_pt['Latent_export'], color='darkorange', linewidth=2)
@@ -284,13 +279,13 @@ if __name__ == '__main__':
     ax.set_ylabel(r'$-\nabla \cdot \langle L_v q \mathbf{v} \rangle$ [W $m^{-2}$]', fontsize=13)
     ax.set_title('(b) Moisture Convergence', fontsize=14, loc='left', fontweight='bold')
 
-    # 3. Exhaust: Dry Static Energy Export (DSE Export)
+    # 3. Column Moisture Storage (Tendency) - The "Result"
     ax = axes[2]
-    ax.plot(time_me, me_pt['DSE_export'], color='blue', linewidth=2.5)
-    ax.plot(time_rp, rp_pt['DSE_export'], color='darkorange', linewidth=2.5)
+    ax.plot(time_me, me_pt['dLatentdt'], color='blue', linewidth=2)
+    ax.plot(time_rp, rp_pt['dLatentdt'], color='darkorange', linewidth=2)
     ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$\nabla \cdot \langle s \mathbf{v} \rangle$ [W $m^{-2}$]', fontsize=13)
-    ax.set_title('(c) Dry Static Energy Export', fontsize=14, loc='left', fontweight='bold')
+    ax.set_ylabel(r'$\partial\langle L_v q \rangle/\partial t$ [W $m^{-2}$]', fontsize=13)
+    ax.set_title('(c) Column Moisture Storage Tendency', fontsize=14, loc='left', fontweight='bold')
     ax.set_xlabel('Time (May 2005)', fontsize=12)
     
     for a in axes:
@@ -300,4 +295,4 @@ if __name__ == '__main__':
     output_fig = 'mse_budget_comparison.png'
     plt.savefig(output_fig, dpi=300, bbox_inches='tight')
     print(f"Plot saved to {output_fig}")
-    # plt.show()
+
