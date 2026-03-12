@@ -123,31 +123,50 @@ def compute_mse_budget(f_prog, f_surf, name):
         state3d = state3d.load() 
         flux2d = flux2d.load()
 
-    # 4. Resample surface fluxes to match 3D state (which is usually every 6H)
-    flux2d = flux2d.resample(time='6H').mean()
-    flux2d = flux2d.sel(time=state3d.time)
+    # 4. Align time axes carefully
+    # Find common times to avoid interleaved NaNs/zeros
+    common_times = np.intersect1d(state3d.time, flux2d.time)
+    if len(common_times) == 0:
+        print("  WARNING: No overlapping times found between 3D and Surf files! Forcing alignment...")
+        flux2d = flux2d.resample(time='3H').interpolate('linear')
+        common_times = np.intersect1d(state3d.time, flux2d.time)
+    
+    state3d = state3d.sel(time=common_times)
+    flux2d  = flux2d.sel(time=common_times)
+    print(f"  -> Aligned to {len(common_times)} common time steps.")
+
     
     lev_dim = get_lev_dim(state3d)
+    # Check pressure units (Standard GEOS is hPa for 'lev' but Pa for 'DELP')
+    p_coord = state3d[lev_dim]
+    is_hpa = bool(p_coord.max() > 100 and p_coord.max() < 2000)
+    
     dp = build_dp_positional(state3d, flux2d["PS"]).clip(min=0)
+    if is_hpa:
+        print(f"  -> Detected pressure in hPa. Converting to Pa...")
+        dp = dp * 100.0 # Convert to Pa
     
     # Mask sub-surface levels: p_mid > PS
     p_mid_vals = state3d[lev_dim].values
+    if is_hpa: p_mid_vals = p_mid_vals * 100.0
+    
     p_mid_4d = xr.DataArray(p_mid_vals, dims=(lev_dim,)).broadcast_like(state3d["T"])
     below_ground = p_mid_4d > flux2d["PS"]
     
     T = state3d["T"].where(~below_ground)
     q = state3d["QV"].where(~below_ground)
-    H = state3d["H"]
-    Phi = g * H  
-
-    # Column MSE (J/m^2), DSE, and Latent
-    s_dry = cp*T + Phi
+    Phi = g * state3d["H"].where(~below_ground)
+ 
+    # Column Integrated Moisture Energy (J/m^2)
+    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/kg] * [kg/m/s^2] / [m/s^2] = [J/m^2]
     q_lat = Lv*q
-    h = s_dry + q_lat
+    col_L = (q_lat * dp / g).sum(lev_dim, skipna=False) # Use skipna=False to catch data gaps
+    
+    # Dry Static Energy and total MSE
+    s_dry = cp*T + Phi
+    col_s = (s_dry * dp / g).sum(lev_dim, skipna=False)
+    col_h = col_s + col_L
 
-    col_h = (h * dp / g).sum(lev_dim)
-    col_s = (s_dry * dp / g).sum(lev_dim)
-    col_L = (q_lat * dp / g).sum(lev_dim)
 
     # dMSEdt, dDSEdt, dLatentdt (W/m^2)
     time = col_h["time"]
@@ -284,13 +303,13 @@ if __name__ == '__main__':
 
     # 3. Column Moisture Reservoir (Total Energy) - The "State"
     ax = axes[2]
-    ax.plot(time_me, me_pt['col_L'], color='blue', linewidth=2.5)
-    ax.plot(time_rp, rp_pt['col_L'], color='darkorange', linewidth=2.5)
-    ax.set_ylabel(r'$\langle L_v q \rangle$ [10$^8$ J $m^{-2}$]', fontsize=13)
-    # Scale Y-axis for readability if values are large
-    ax.yaxis.get_offset_text().set_size(10)
-    ax.set_title('(c) Column Integrated Moisture Energy', fontsize=14, loc='left', fontweight='bold')
+    # Units: plot in 10^8 J/m^2 for better scale
+    ax.plot(time_me, me_pt['col_L']*1e-8, color='blue', linewidth=2.5)
+    ax.plot(time_rp, rp_pt['col_L']*1e-8, color='darkorange', linewidth=2.5)
+    ax.set_ylabel(r'$\langle L_v q \rangle$ [$10^8$ J $m^{-2}$]', fontsize=13)
+    ax.set_title('(c) Column Integrated Moisture Energy Reservoir', fontsize=14, loc='left', fontweight='bold')
     ax.set_xlabel('Time (May 2005)', fontsize=12)
+
     
     for a in axes:
         a.grid(True, linestyle=':', alpha=0.6)
