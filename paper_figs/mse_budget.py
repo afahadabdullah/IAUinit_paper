@@ -1,6 +1,7 @@
 import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
+import dask
 
 # ==============================================================================
 # Configuration
@@ -97,18 +98,19 @@ def ensure_atm_positive(da):
 # ==============================================================================
 def compute_mse_budget(f_prog, f_surf, name):
     print(f"Loading {name} data...")
-    # 1. Open lazily and slice time
-    ds_prog = xr.open_mfdataset(f_prog).sel(time=slice('2005-05-05', '2005-05-14'))
-    ds_surf = xr.open_mfdataset(f_surf).sel(time=slice('2005-05-05', '2005-05-14'))
+    # 1. Open lazily and slice time safely with a synchronous scheduler
+    with dask.config.set(scheduler='single-threaded'):
+        ds_prog = xr.open_mfdataset(f_prog, parallel=False).sel(time=slice('2005-05-05', '2005-05-14'))
+        ds_surf = xr.open_mfdataset(f_surf, parallel=False).sel(time=slice('2005-05-05', '2005-05-14'))
 
-    # 2. Slice spatially *before* loading into memory or doing heavy math
-    state3d = sel_region(ds_prog, LAT_RANGE, LON_RANGE)
-    flux2d  = sel_region(ds_surf, LAT_RANGE, LON_RANGE)
+        # 2. Slice spatially *before* loading into memory or doing heavy math
+        state3d = sel_region(ds_prog, LAT_RANGE, LON_RANGE)
+        flux2d  = sel_region(ds_surf, LAT_RANGE, LON_RANGE)
 
-    # 3. Load the small subset into memory for fast processing
-    print(f"  -> Loading spatial subset into memory...")
-    state3d = state3d.load() 
-    flux2d = flux2d.load()
+        # 3. Load the small subset into memory for fast processing
+        print(f"  -> Loading spatial subset into memory...")
+        state3d = state3d.load() 
+        flux2d = flux2d.load()
 
     # 4. Resample surface fluxes to match 3D state (which is usually every 6H)
     flux2d = flux2d.resample(time='6H').mean()
