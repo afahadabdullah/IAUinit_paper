@@ -260,86 +260,44 @@ if __name__ == '__main__':
     # We will plot the Point Series as requested by the user
     time_rp = rp_pt.time.values
     time_me = me_pt.time.values
-
-    # Setup the plot - 8 Panels for Full Diagnosis
-    fig, axes = plt.subplots(8, 1, figsize=(14, 28), sharex=True)
-    fig.subplots_adjust(hspace=0.35)
+    # Setup the plot - 3 Panels for the Manuscript (Fuel, Fire, Exhaust)
+    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+    fig.subplots_adjust(hspace=0.25)
     
-    # Titles
-    fig.suptitle(f'Initialization Shock Diagnosis (Lon={PT_LON}°, Lat={PT_LAT}°)\nInternal Energy Transformations vs Dynamic Responses', fontsize=18, y=0.92)
+    # Clean titles for publication
+    # fig.suptitle(f'Initialization Shock Diagnosis (Lon={PT_LON}°, Lat={PT_LAT}°)', fontsize=16)
 
-    # 1. dMSE/dt
+    # 1. Fire: Precipitation Heating (Lv*P)
     ax = axes[0]
-    ax.plot(time_me, me_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC (ME)')
-    ax.plot(time_rp, rp_pt['dMSEdt'], color='darkorange', linewidth=2.5, label='IAU IC (RP)')
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$\partial\langle h \rangle/\partial t$', fontsize=12)
-    ax.legend(loc='upper right', fontsize=10)
-    ax.set_title('Total Column MSE Tendency (Energy Storage)', fontsize=14, fontweight='bold')
+    ax.plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5, label='Reanalysis IC')
+    ax.plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5, label='IAU IC')
+    ax.set_ylabel(r'$L_v P$ [W $m^{-2}$]', fontsize=13)
+    ax.legend(loc='upper right', fontsize=11)
+    ax.set_title('(a) Precipitation Heating', fontsize=14, loc='left', fontweight='bold')
 
-    # 2. dDSE/dt
+    # 2. Fuel: Moisture Convergence (-Latent Export)
+    # Expert tip: Plot -Export so convergence is positive
     ax = axes[1]
-    ax.plot(time_me, me_pt['dDSEdt'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['dDSEdt'], color='darkorange', linewidth=2)
+    ax.plot(time_me, -me_pt['Latent_export'], color='blue', linewidth=2)
+    ax.plot(time_rp, -rp_pt['Latent_export'], color='darkorange', linewidth=2)
     ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$\partial\langle s \rangle/\partial t$', fontsize=12)
-    ax.set_title('Column Heat Storage (Dry Static Energy Tendency)', fontsize=14)
+    ax.set_ylabel(r'$-\nabla \cdot \langle L_v q \mathbf{v} \rangle$ [W $m^{-2}$]', fontsize=13)
+    ax.set_title('(b) Moisture Convergence', fontsize=14, loc='left', fontweight='bold')
 
-    # 3. dLatent/dt
+    # 3. Exhaust: Dry Static Energy Export (DSE Export)
     ax = axes[2]
-    ax.plot(time_me, me_pt['dLatentdt'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['dLatentdt'], color='darkorange', linewidth=2)
+    ax.plot(time_me, me_pt['DSE_export'], color='blue', linewidth=2.5)
+    ax.plot(time_rp, rp_pt['DSE_export'], color='darkorange', linewidth=2.5)
     ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$\partial\langle L_v q \rangle/\partial t$', fontsize=12)
-    ax.set_title('Column Moisture Storage (Latent Energy Tendency)', fontsize=14)
-
-    # 4. Precipitation
-    ax = axes[3]
-    ax.plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5)
-    ax.plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5)
-    ax.set_ylabel(r'$L_v P$', fontsize=12)
-    ax.set_title('Hydrological Shock Component: Precipitation Heating ($L_v \times P$)', fontsize=14, color='red')
-
-    # 5. DSE Export
-    ax = axes[4]
-    ax.plot(time_me, me_pt['DSE_export'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['DSE_export'], color='darkorange', linewidth=2)
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'Export', fontsize=12)
-    ax.set_title(r'Thermal Response: DSE Export (Dynamic "Venting" of $L_v P$ Heat)', fontsize=14)
-
-    # 6. Latent Export
-    ax = axes[5]
-    ax.plot(time_me, me_pt['Latent_export'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['Latent_export'], color='darkorange', linewidth=2)
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'Export', fontsize=12)
-    ax.set_title('Hydrological Response: Latent Export (Negative = Convergence fuel for Precip)', fontsize=14)
-
-    # 7. Net MSE Forcing (External)
-    ax = axes[6]
-    ax.plot(time_me, me_pt['Hnet'], color='blue', linewidth=2)
-    ax.plot(time_rp, rp_pt['Hnet'], color='darkorange', linewidth=2)
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'$H_{net}$', fontsize=12)
-    ax.set_title('Net External Forcing (Rad + Turbulent Fluxes)', fontsize=14)
-
-    # 8. Total MSE Export
-    ax = axes[7]
-    ax.plot(time_me, me_pt['MSE_export'], color='blue', linewidth=2.5)
-    ax.plot(time_rp, rp_pt['MSE_export'], color='darkorange', linewidth=2.5)
-    ax.axhline(0, color='gray', linestyle='--', alpha=0.7)
-    ax.set_ylabel(r'Total Export', fontsize=12)
-    ax.set_title('Total Column MSE Export (Dynamics)', fontsize=14, fontweight='bold')
+    ax.set_ylabel(r'$\nabla \cdot \langle s \mathbf{v} \rangle$ [W $m^{-2}$]', fontsize=13)
+    ax.set_title('(c) Dry Static Energy Export', fontsize=14, loc='left', fontweight='bold')
     ax.set_xlabel('Time (May 2005)', fontsize=12)
     
     for a in axes:
-        a.set_ylabel(a.get_ylabel() + r' [W $m^{-2}$]')
         a.grid(True, linestyle=':', alpha=0.6)
+        a.tick_params(axis='both', labelsize=11)
 
-    for ax in axes:
-        ax.grid(True, linestyle=':', alpha=0.6)
-
-    output_file = 'mse_budget_comparison.png'
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"\nSaved MSE Budget comparison plot to {output_file}")
+    output_fig = 'mse_budget_comparison.png'
+    plt.savefig(output_fig, dpi=300, bbox_inches='tight')
+    print(f"Plot saved to {output_fig}")
+    # plt.show()
