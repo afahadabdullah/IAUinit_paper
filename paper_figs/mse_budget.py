@@ -123,17 +123,12 @@ def compute_mse_budget(f_prog, f_surf, name):
         state3d = state3d.load() 
         flux2d = flux2d.load()
 
-    # 4. Align time axes carefully
-    # Find common times to avoid interleaved NaNs/zeros
-    common_times = np.intersect1d(state3d.time, flux2d.time)
-    if len(common_times) == 0:
-        print("  WARNING: No overlapping times found between 3D and Surf files! Forcing alignment...")
-        flux2d = flux2d.resample(time='3H').interpolate('linear')
-        common_times = np.intersect1d(state3d.time, flux2d.time)
-    
-    state3d = state3d.sel(time=common_times)
-    flux2d  = flux2d.sel(time=common_times)
-    print(f"  -> Aligned to {len(common_times)} common time steps.")
+    # 4. Align time axes robustly
+    # We use state3d as the master clock and reindex flux2d to match it.
+    # This handles cases where one dataset might be shifted by a few minutes or hours.
+    flux2d = flux2d.reindex(time=state3d.time, method='nearest')
+    print(f"  -> Aligned surface fluxes to 3D state times ({len(state3d.time)} steps).")
+
 
     
     lev_dim = get_lev_dim(state3d)
@@ -158,14 +153,15 @@ def compute_mse_budget(f_prog, f_surf, name):
     Phi = g * state3d["H"].where(~below_ground)
  
     # Column Integrated Moisture Energy (J/m^2)
-    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/kg] * [kg/m/s^2] / [m/s^2] = [J/m^2]
+    # Units check: [J/kg] * [Pa] / [m/s^2] = [J/m^2]
     q_lat = Lv*q
-    col_L = (q_lat * dp / g).sum(lev_dim, skipna=False) # Use skipna=False to catch data gaps
+    col_L = (q_lat * dp / g).sum(lev_dim, skipna=True) 
     
     # Dry Static Energy and total MSE
     s_dry = cp*T + Phi
-    col_s = (s_dry * dp / g).sum(lev_dim, skipna=False)
+    col_s = (s_dry * dp / g).sum(lev_dim, skipna=True)
     col_h = col_s + col_L
+
 
 
     # dMSEdt, dDSEdt, dLatentdt (W/m^2)
