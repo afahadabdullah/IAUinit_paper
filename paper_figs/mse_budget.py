@@ -120,20 +120,24 @@ def compute_mse_budget(f_prog, f_surf, name):
 
         # 3. Load the small subset into memory for fast processing
         print(f"  -> Loading spatial subset into memory...")
-        state3d = state3d.load() 
-        flux2d = flux2d.load()
-
-    # 4. Align & Smooth Data (CRITICAL for Budget Stability)
-    # Resample both to 6H mean to remove 2-step sloshing and align time axes perfectly
-    print("  -> Resampling and aligning to common 6H grid...")
-    state3d = state3d.resample(time='6H').mean()
-    flux2d = flux2d.resample(time='6H').mean()
+    # 4. Robust Time Alignment (Fixes Sawtooth/Gaps)
+    # GEOS files often have small millisecond offsets. Rounding ensures they 'snap' together.
+    state3d['time'] = state3d.time.dt.round('1min')
+    flux2d['time']  = flux2d.time.dt.round('1min')
     
-    # Strictly intersect to avoid any NaN gaps
-    common_times = np.intersect1d(state3d.time.values, flux2d.time.values)
-    state3d = state3d.sel(time=common_times)
-    flux2d = flux2d.sel(time=common_times)
-    print(f"  -> Aligned to {len(common_times)} common 6H time steps.")
+    # Merge into a single dataset with inner join to drop any unmatched time steps
+    print("  -> Merging 3D and Surface datasets with time-snapping...")
+    ds = xr.merge([state3d, flux2d], join='inner')
+    
+    # 5. Smooth to 6H for budget stability (removes numerical 2-step sloshing)
+    print("  -> Resampling to 6H mean for manuscript-quality smoothness...")
+    ds = ds.resample(time='6H').mean().dropna(dim='time')
+    
+    # Extract aligned variables
+    state3d = ds
+    flux2d  = ds 
+    print(f"  -> Successfully aligned to {len(ds.time)} continuous 6H steps.")
+
 
 
 
