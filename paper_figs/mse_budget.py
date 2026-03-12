@@ -259,6 +259,7 @@ if __name__ == '__main__':
 
     # We will plot the Point Series as requested by the user
     time_rp = rp_pt.time.values
+    time_me = me_pt.time.values
     # Setup the plot - 3 Panels: Moisture Budget Story
     fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
     fig.subplots_adjust(hspace=0.25)
