@@ -2,6 +2,7 @@ import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 import dask
+import os
 
 # ==============================================================================
 # Configuration
@@ -97,7 +98,17 @@ def ensure_atm_positive(da):
 # MSE Budget Engine
 # ==============================================================================
 def compute_mse_budget(f_prog, f_surf, name):
-    print(f"Loading {name} data...")
+    cache_dir = "cache"
+    if not os.path.exists(cache_dir): os.makedirs(cache_dir)
+    
+    pt_file = f"{cache_dir}/{name}_pt.nc"
+    box_file = f"{cache_dir}/{name}_box.nc"
+    
+    if os.path.exists(pt_file) and os.path.exists(box_file):
+        print(f"Loading {name} from cache...")
+        return xr.open_dataset(pt_file), xr.open_dataset(box_file)
+
+    print(f"Loading {name} data from experiments...")
     # 1. Open lazily and slice time safely with a synchronous scheduler
     with dask.config.set(scheduler='single-threaded'):
         ds_prog = xr.open_mfdataset(f_prog, parallel=False).sel(time=slice('2005-05-05', '2005-05-14'))
@@ -201,6 +212,10 @@ def compute_mse_budget(f_prog, f_surf, name):
         "Precip": box_mean(Precip),
         "MSE_export": box_mean(MSE_export),
     })
+
+    print(f"  -> Caching results to {cache_dir}/...")
+    pt_series.to_netcdf(pt_file)
+    series.to_netcdf(box_file)
 
     return pt_series, series
 
