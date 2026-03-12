@@ -208,11 +208,11 @@ def compute_mse_budget(f_prog, f_surf, name):
 # Execution & Plotting
 # ==============================================================================
 if __name__ == '__main__':
-    print("Initiating Reanalysis MSE Budget...")
-    rp_pt, rp_box = compute_mse_budget(rp_prog, rp_surf, "Reanalysis-IC")
+    print("Initiating Reanalysis (ME) MSE Budget...")
+    me_pt, me_box = compute_mse_budget(me_prog, me_surf, "Reanalysis-IC")
     
-    print("Initiating IAU MSE Budget...")
-    me_pt, me_box = compute_mse_budget(me_prog, me_surf, "IAU-IC")
+    print("Initiating IAU (RP) MSE Budget...")
+    rp_pt, rp_box = compute_mse_budget(rp_prog, rp_surf, "IAU-IC")
 
     # We will plot the Point Series as requested by the user
     time_rp = rp_pt.time.values
@@ -226,29 +226,29 @@ if __name__ == '__main__':
     fig.suptitle(f'MSE Budget & Precipitation at Grid Point (Lon={PT_LON}°, Lat={PT_LAT}°)\nReanalysis vs IAU Initialization', fontsize=16)
 
     # 1. dMSE/dt
-    axes[0].plot(time_rp, rp_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
-    axes[0].plot(time_me, me_pt['dMSEdt'], color='darkorange', linewidth=2.5, label='IAU IC')
+    axes[0].plot(time_me, me_pt['dMSEdt'], color='blue', linewidth=2.5, label='Reanalysis IC')
+    axes[0].plot(time_rp, rp_pt['dMSEdt'], color='darkorange', linewidth=2.5, label='IAU IC')
     axes[0].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[0].set_ylabel(r'$\partial\langle h \rangle/\partial t$ [W $m^{-2}$]', fontsize=14)
     axes[0].legend(loc='upper right', fontsize=12)
     axes[0].set_title('Column Moist Static Energy Tendency', fontsize=14)
 
     # 2. Net column heating (Hnet)
-    axes[1].plot(time_rp, rp_pt['Hnet'], color='blue', linewidth=2.5)
-    axes[1].plot(time_me, me_pt['Hnet'], color='darkorange', linewidth=2.5)
+    axes[1].plot(time_me, me_pt['Hnet'], color='blue', linewidth=2.5)
+    axes[1].plot(time_rp, rp_pt['Hnet'], color='darkorange', linewidth=2.5)
     axes[1].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[1].set_ylabel(r'$Q_{net}$ ($H_{net}$) [W $m^{-2}$]', fontsize=14)
     axes[1].set_title('Net Moist Forcing (Radiation + Turbulent Fluxes)', fontsize=14)
 
     # 3. Precipitation Energy Equivalent
-    axes[2].plot(time_rp, rp_pt['Precip'], color='blue', linewidth=2.5)
-    axes[2].plot(time_me, me_pt['Precip'], color='darkorange', linewidth=2.5)
+    axes[2].plot(time_me, me_pt['Precip'], color='blue', linewidth=2.5)
+    axes[2].plot(time_rp, rp_pt['Precip'], color='darkorange', linewidth=2.5)
     axes[2].set_ylabel(r'$L_v P$ [W $m^{-2}$]', fontsize=14)
     axes[2].set_title('Internal Energy Transformation: Precipitation ($L_v \times P$)', fontsize=14)
 
     # 4. Apparent MSE Export
-    axes[3].plot(time_rp, rp_pt['MSE_export'], color='blue', linewidth=2.5)
-    axes[3].plot(time_me, me_pt['MSE_export'], color='darkorange', linewidth=2.5)
+    axes[3].plot(time_me, me_pt['MSE_export'], color='blue', linewidth=2.5)
+    axes[3].plot(time_rp, rp_pt['MSE_export'], color='darkorange', linewidth=2.5)
     axes[3].axhline(0, color='gray', linestyle='--', alpha=0.7)
     axes[3].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
     axes[3].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
