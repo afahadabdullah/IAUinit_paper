@@ -135,7 +135,9 @@ def compute_mse_budget(f_prog, f_surf, name):
 
     # dMSEdt (W/m^2)
     time = col_h["time"]
-    dt_sec = (time.shift(time=-1) - time).astype("timedelta64[s]").astype(float)
+    # Calculate dt in seconds correctly to avoid nanosecond scaling issues
+    dt_delta = (time.shift(time=-1) - time)
+    dt_sec = dt_delta.dt.total_seconds()
     dMSEdt = (col_h.shift(time=-1) - col_h.shift(time=+1)) / (2.0*dt_sec)
 
     # Radiation terms
@@ -233,8 +235,8 @@ if __name__ == '__main__':
     axes[2].plot(time_rp, rp_box['MSE_export'], color='blue', linewidth=2.5)
     axes[2].plot(time_me, me_box['MSE_export'], color='darkorange', linewidth=2.5)
     axes[2].axhline(0, color='gray', linestyle='--', alpha=0.7)
-    axes[2].set_ylabel(r'MSE Export ($\nabla \cdot \langle v h \rangle$) [W $m^{-2}$]', fontsize=14)
-    axes[2].set_title('Apparent MSE Export', fontsize=14)
+    axes[2].set_ylabel(r'MSE Export [$W m^{-2}$]', fontsize=14)
+    axes[2].set_title(r'Apparent MSE Export: $H_{net} - \partial\langle h \rangle/\partial t$', fontsize=14)
     axes[2].tick_params(axis='y', labelsize=12)
     axes[2].tick_params(axis='x', labelsize=12)
 
