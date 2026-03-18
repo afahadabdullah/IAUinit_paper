@@ -358,9 +358,11 @@ def make_series_dataset(fields, metadata):
 
 def build_plot_label(ds):
     if ds.attrs.get("series_kind") == "point":
+        lon_half_width = float(ds.attrs.get("lon_half_width", POINT_LON_HALF_WIDTH))
+        lat_half_width = float(ds.attrs.get("lat_half_width", POINT_LAT_HALF_WIDTH))
         return (
             f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} "
-            f"+/-{ds.attrs['lon_half_width']:.1f}deg lon, +/-{ds.attrs['lat_half_width']:.1f}deg lat"
+            f"+/-{lon_half_width:.1f}deg lon, +/-{lat_half_width:.1f}deg lat"
         )
     return f"{LAT_RANGE[0]:.0f} to {LAT_RANGE[1]:.0f} lat, {LON_RANGE[0]:.0f} to {LON_RANGE[1]:.0f} lon box mean"
 
