@@ -162,6 +162,23 @@ def box_mean(da):
     return da.weighted(weights).mean(("lat", "lon"))
 
 
+def collapse_duplicate_times(ds):
+    ds = ds.sortby("time")
+    time_vals = np.asarray(ds.time.values)
+    unique_times, inverse = np.unique(time_vals, return_inverse=True)
+    if len(unique_times) == len(time_vals):
+        return ds
+
+    collapsed = []
+    for group_id, time_value in enumerate(unique_times):
+        time_idx = np.flatnonzero(inverse == group_id)
+        block = ds.isel(time=time_idx)
+        collapsed.append(block.mean("time", keep_attrs=True).expand_dims(time=[time_value]))
+
+    print(f"  -> Collapsed {len(time_vals) - len(unique_times)} duplicate rounded timestamps.")
+    return xr.concat(collapsed, dim="time").assign_coords(time=unique_times)
+
+
 def detect_precip_spikes(precip, quantile=SPIKE_QUANTILE, min_separation=MIN_PEAK_SEPARATION, max_spikes=MAX_SPIKES):
     values = np.asarray(precip.values, dtype=float)
     finite = np.isfinite(values)
@@ -270,8 +287,8 @@ def compute_mse_budget(f_prog, f_surf, name):
     state3d["time"] = state3d.time.dt.round("6h")
     flux2d["time"] = flux2d.time.dt.round("6h")
 
-    state3d = state3d.groupby("time").mean("time")
-    flux2d = flux2d.groupby("time").mean("time")
+    state3d = collapse_duplicate_times(state3d)
+    flux2d = collapse_duplicate_times(flux2d)
 
     common_times = np.intersect1d(state3d.time, flux2d.time)
     if len(common_times) == 0:
