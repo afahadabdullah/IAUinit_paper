@@ -6,6 +6,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
 # ==============================================================================
 # Configuration
 # ==============================================================================
@@ -13,6 +18,8 @@ LAT_RANGE = (-15.0, 15.0)
 LON_RANGE = (140.0, 170.0)
 
 PT_LON, PT_LAT = 143.0, -1.0
+POINT_LAT_HALF_WIDTH = 1.5
+POINT_LON_HALF_WIDTH = 1.5
 FOCUS_START = "2005-05-06"
 FOCUS_END = "2005-05-14"
 
@@ -23,6 +30,7 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 3
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_STEPS = 1
+PLOT_SMOOTH_STEPS = 3
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -184,6 +192,20 @@ def box_mean(da):
     return da.weighted(weights).mean(("lat", "lon"))
 
 
+def area_mean(da):
+    weights = np.cos(np.deg2rad(da["lat"]))
+    return da.weighted(weights).mean(("lat", "lon"))
+
+
+def point_box_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lon_half_width=POINT_LON_HALF_WIDTH, lat_half_width=POINT_LAT_HALF_WIDTH):
+    lat_rng = (pt_lat - lat_half_width, pt_lat + lat_half_width)
+    lon_rng = (pt_lon - lon_half_width, pt_lon + lon_half_width)
+    subset = sel_region(da, lat_rng, lon_rng)
+    if subset.sizes.get("lat", 0) == 0 or subset.sizes.get("lon", 0) == 0:
+        raise ValueError("Point-box mean selection returned no grid cells.")
+    return area_mean(subset)
+
+
 def require_vars(ds, required, label):
     missing = [name for name in required if name not in ds.variables]
     if missing:
@@ -206,23 +228,26 @@ def preprocess_surf(ds):
     return sel_region(ds, LAT_RANGE, LON_RANGE)
 
 
+def iter_files_with_progress(files, label):
+    if tqdm is None:
+        print(f"  -> Opening {len(files)} {label} files serially...")
+        return files
+    return tqdm(files, desc=f"Loading {label}", unit="file")
+
+
 def load_serial_subset(file_pattern, preprocess, label, time_start="2005-04-30", time_end="2005-05-31"):
     files = sorted(glob.glob(file_pattern))
     if not files:
         raise ValueError(f"No files matched for {label}: {file_pattern}")
 
     pieces = []
-    print(f"  -> Opening {len(files)} {label} files serially...")
-    for idx, path in enumerate(files, start=1):
+    for path in iter_files_with_progress(files, label):
         with xr.open_dataset(path, engine="netcdf4", cache=False) as ds:
             ds = preprocess(ds)
             ds = ds.sel(time=slice(time_start, time_end))
             if ds.sizes.get("time", 0) == 0:
                 continue
             pieces.append(ds.load())
-
-        if idx == 1 or idx == len(files) or idx % 10 == 0:
-            print(f"     loaded {idx}/{len(files)} {label} files")
 
     if not pieces:
         raise ValueError(f"All {label} files were empty after subsetting {time_start} to {time_end}.")
@@ -333,7 +358,10 @@ def make_series_dataset(fields, metadata):
 
 def build_plot_label(ds):
     if ds.attrs.get("series_kind") == "point":
-        return format_lon_lat(ds.attrs["selected_lon"], ds.attrs["selected_lat"])
+        return (
+            f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} "
+            f"+/-{ds.attrs['lon_half_width']:.1f}deg lon, +/-{ds.attrs['lat_half_width']:.1f}deg lat"
+        )
     return f"{LAT_RANGE[0]:.0f} to {LAT_RANGE[1]:.0f} lat, {LON_RANGE[0]:.0f} to {LON_RANGE[1]:.0f} lon box mean"
 
 
@@ -367,6 +395,12 @@ def print_spike_summary(series, spike_indices, name):
             f"storage={storage:7.2f} ({frac_s:5.1f}%), "
             f"residual={residual:8.3f}, dominant={dominant}"
         )
+
+
+def smooth_dataset_for_plot(ds, steps=PLOT_SMOOTH_STEPS):
+    if steps <= 1:
+        return ds
+    return ds.rolling(time=steps, center=True, min_periods=1).mean()
 
 
 # ==============================================================================
@@ -494,19 +528,23 @@ def compute_mse_budget(f_prog, f_surf, name):
     }
 
     lon_c = canon_lon(PT_LON, flux2d.lon)
-    pt_sel = dict(lat=PT_LAT, lon=lon_c, method="nearest")
-    template = Hnet.sel(**pt_sel)
-    selected_lat = float(template["lat"].values)
-    selected_lon = float(template["lon"].values)
+    lat_rng = (PT_LAT - POINT_LAT_HALF_WIDTH, PT_LAT + POINT_LAT_HALF_WIDTH)
+    lon_rng = (PT_LON - POINT_LON_HALF_WIDTH, PT_LON + POINT_LON_HALF_WIDTH)
+    template = sel_region(Hnet, lat_rng, lon_rng)
+    selected_lat = float(template["lat"].mean().values)
+    selected_lon = float(template["lon"].mean().values)
 
     pt_series = make_series_dataset(
-        {name_: da.sel(**pt_sel) for name_, da in fields.items()},
+        {name_: point_box_mean(da) for name_, da in fields.items()},
         {
             "series_kind": "point",
             "requested_lat": PT_LAT,
             "requested_lon": PT_LON,
             "selected_lat": selected_lat,
             "selected_lon": selected_lon,
+            "lat_half_width": POINT_LAT_HALF_WIDTH,
+            "lon_half_width": POINT_LON_HALF_WIDTH,
+            "point_lon_canonical": lon_c,
             "experiment_name": name,
         },
     )
@@ -541,21 +579,23 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     if me_series.time.size == 0:
         raise ValueError("No common time points after aligning the two experiments.")
 
-    spike_indices, threshold = detect_precip_spikes(me_series["Precip"])
-    plot_label = build_plot_label(me_series)
+    me_plot = smooth_dataset_for_plot(me_series)
+    rp_plot = smooth_dataset_for_plot(rp_series)
+    spike_indices, threshold = detect_precip_spikes(me_plot["Precip"])
+    plot_label = build_plot_label(me_plot)
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
-    print_spike_summary(me_series, spike_indices, f"{me_series.attrs.get('experiment_name', 'Reanalysis-IC')} ({series_kind})")
+    print_spike_summary(me_plot, spike_indices, f"{me_plot.attrs.get('experiment_name', 'Reanalysis-IC')} ({series_kind}, smoothed)")
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
-    time_values = me_series.time.values
-    me_colL_anom = (me_series["col_L"] - me_series["col_L"].mean("time")) * 1.0e-8
-    rp_colL_anom = (rp_series["col_L"] - rp_series["col_L"].mean("time")) * 1.0e-8
+    time_values = me_plot.time.values
+    me_colL_anom = (me_plot["col_L"] - me_plot["col_L"].mean("time")) * 1.0e-8
+    rp_colL_anom = (rp_plot["col_L"] - rp_plot["col_L"].mean("time")) * 1.0e-8
 
-    diff_precip = me_series["Precip"] - rp_series["Precip"]
-    diff_lhf = me_series["LHF"] - rp_series["LHF"]
-    diff_conv = me_series["MoistureConvergence"] - rp_series["MoistureConvergence"]
-    diff_storage = me_series["StorageRelease"] - rp_series["StorageRelease"]
+    diff_precip = me_plot["Precip"] - rp_plot["Precip"]
+    diff_lhf = me_plot["LHF"] - rp_plot["LHF"]
+    diff_conv = me_plot["MoistureConvergence"] - rp_plot["MoistureConvergence"]
+    diff_storage = me_plot["StorageRelease"] - rp_plot["StorageRelease"]
     diff_closed = diff_lhf + diff_conv + diff_storage
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
@@ -568,11 +608,11 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[0]
     shade_spike_windows(ax, time_values, spike_indices)
-    ax.plot(time_values, me_series["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
-    ax.plot(time_values, rp_series["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
+    ax.plot(time_values, me_plot["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
+    ax.plot(time_values, rp_plot["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
     ax.scatter(
         time_values[spike_indices],
-        me_series["Precip"].isel(time=spike_indices),
+        me_plot["Precip"].isel(time=spike_indices),
         color="navy",
         s=34,
         zorder=5,
@@ -580,7 +620,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     for n, idx in enumerate(spike_indices, start=1):
         ax.annotate(
             f"S{n}",
-            (time_values[idx], float(me_series["Precip"].isel(time=idx))),
+            (time_values[idx], float(me_plot["Precip"].isel(time=idx))),
             xytext=(0, 8),
             textcoords="offset points",
             ha="center",
@@ -592,11 +632,11 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices)
-    ax.plot(time_values, me_series["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
-    ax.plot(time_values, me_series["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
-    ax.plot(time_values, me_series["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
-    ax.plot(time_values, me_series["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
-    ax.plot(time_values, me_series["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
+    ax.plot(time_values, me_plot["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
+    ax.plot(time_values, me_plot["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
+    ax.plot(time_values, me_plot["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
+    ax.plot(time_values, me_plot["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
+    ax.plot(time_values, me_plot["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
     ax.set_ylabel(r"W m$^{-2}$")
     ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
