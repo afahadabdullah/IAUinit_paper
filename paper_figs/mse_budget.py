@@ -20,6 +20,8 @@ LON_RANGE = (140.0, 170.0)
 PT_LON, PT_LAT = 143.0, -1.0
 POINT_LAT_HALF_WIDTH = 1.5
 POINT_LON_HALF_WIDTH = 1.5
+POINT_LAT_NEIGHBOR_COUNT = 3
+POINT_LON_NEIGHBOR_COUNT = 3
 FOCUS_START = "2005-05-06"
 FOCUS_END = "2005-05-14"
 
@@ -180,6 +182,10 @@ def canon_lon(val, ds_lon):
     return ((val + 180.0) % 360.0) - 180.0
 
 
+def lon_distance_deg(lon_vals, target_lon):
+    return np.abs(((lon_vals - target_lon + 180.0) % 360.0) - 180.0)
+
+
 def format_lon_lat(lon, lat):
     lon = lon % 360.0
     lon_txt = f"{lon:.1f}E" if lon <= 180.0 else f"{360.0 - lon:.1f}W"
@@ -195,6 +201,39 @@ def box_mean(da):
 def area_mean(da):
     weights = np.cos(np.deg2rad(da["lat"]))
     return da.weighted(weights).mean(("lat", "lon"))
+
+
+def nearest_coord_values(coord, target, count, is_lon=False):
+    values = np.asarray(coord.values, dtype=float)
+    if is_lon:
+        dist = lon_distance_deg(values, target)
+    else:
+        dist = np.abs(values - target)
+    idx = np.argsort(dist)[: min(count, len(values))]
+    idx = np.sort(idx)
+    return values[idx]
+
+
+def point_neighbor_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LAT_NEIGHBOR_COUNT, lon_count=POINT_LON_NEIGHBOR_COUNT):
+    lon_target = canon_lon(pt_lon, da["lon"])
+    lat_vals = nearest_coord_values(da["lat"], pt_lat, lat_count, is_lon=False)
+    lon_vals = nearest_coord_values(da["lon"], lon_target, lon_count, is_lon=True)
+    subset = da.sel(lat=lat_vals, lon=lon_vals)
+    if subset.sizes.get("lat", 0) == 0 or subset.sizes.get("lon", 0) == 0:
+        raise ValueError("Point-neighbor mean selection returned no grid cells.")
+
+    lat_dist = xr.DataArray(np.abs(subset["lat"].values - pt_lat), dims=("lat",), coords={"lat": subset["lat"]})
+    lon_dist = xr.DataArray(
+        lon_distance_deg(subset["lon"].values.astype(float), lon_target),
+        dims=("lon",),
+        coords={"lon": subset["lon"]},
+    )
+    lat_scale = max(float(lat_dist.min()), 1.0)
+    lon_scale = max(float(lon_dist.min()), 1.0)
+    lat_w = np.exp(-0.5 * (lat_dist / lat_scale) ** 2) * np.cos(np.deg2rad(subset["lat"]))
+    lon_w = np.exp(-0.5 * (lon_dist / lon_scale) ** 2)
+    weights = lat_w * lon_w
+    return subset.weighted(weights).mean(("lat", "lon"))
 
 
 def point_box_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lon_half_width=POINT_LON_HALF_WIDTH, lat_half_width=POINT_LAT_HALF_WIDTH):
@@ -358,8 +397,15 @@ def make_series_dataset(fields, metadata):
 
 def build_plot_label(ds):
     if ds.attrs.get("series_kind") == "point":
+        lat_neighbor_count = int(ds.attrs.get("lat_neighbor_count", POINT_LAT_NEIGHBOR_COUNT))
+        lon_neighbor_count = int(ds.attrs.get("lon_neighbor_count", POINT_LON_NEIGHBOR_COUNT))
         lon_half_width = float(ds.attrs.get("lon_half_width", POINT_LON_HALF_WIDTH))
         lat_half_width = float(ds.attrs.get("lat_half_width", POINT_LAT_HALF_WIDTH))
+        if "lat_neighbor_count" in ds.attrs or "lon_neighbor_count" in ds.attrs:
+            return (
+                f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} "
+                f"{lat_neighbor_count}x{lon_neighbor_count} neighbor mean"
+            )
         return (
             f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} "
             f"+/-{lon_half_width:.1f}deg lon, +/-{lat_half_width:.1f}deg lat"
@@ -408,14 +454,35 @@ def infer_time_step_hours(ds):
 
 def smooth_steps_from_hours(ds, target_hours=EVENT_SMOOTH_HOURS):
     dt_hours = infer_time_step_hours(ds)
-    return max(1, int(round(target_hours / max(dt_hours, 1.0e-6))))
+    steps = max(1, int(np.ceil(target_hours / max(dt_hours, 1.0e-6))))
+    if steps > 1 and steps % 2 == 0:
+        steps += 1
+    return steps
 
 
 def rolling_event_mean(da, steps):
     if steps <= 1:
         return da
+    weights = np.hanning(steps)
+    if not np.isfinite(weights).all() or np.allclose(weights.sum(), 0.0):
+        weights = np.ones(steps, dtype=float)
+    weights = weights / weights.sum()
+    weight_da = xr.DataArray(weights, dims=("window",))
     min_periods = max(1, steps // 2)
-    return da.rolling(time=steps, center=True, min_periods=min_periods).mean()
+    rolled = da.rolling(time=steps, center=True, min_periods=min_periods).construct("window")
+    valid = rolled.notnull()
+    num = (rolled.fillna(0.0) * weight_da).sum("window")
+    den = (valid.astype(float) * weight_da).sum("window")
+    return xr.where(den > 0.0, num / den, np.nan)
+
+
+def refine_time_for_plot(ds, spacing_hours=1):
+    if ds.sizes.get("time", 0) < 2:
+        return ds
+    start = ds.time.values[0].astype("datetime64[h]")
+    end = ds.time.values[-1].astype("datetime64[h]")
+    new_time = np.arange(start, end + np.timedelta64(spacing_hours, "h"), np.timedelta64(spacing_hours, "h"))
+    return ds.interp(time=new_time)
 
 
 def half_window_steps_from_hours(ds, window_hours=SPIKE_WINDOW_HOURS):
@@ -627,13 +694,15 @@ def compute_mse_budget(f_prog, f_surf, name):
     selected_lon = float(template["lon"].mean().values)
 
     pt_series = make_series_dataset(
-        {name_: point_box_mean(da) for name_, da in fields.items()},
+        {name_: point_neighbor_mean(da) for name_, da in fields.items()},
         {
             "series_kind": "point",
             "requested_lat": PT_LAT,
             "requested_lon": PT_LON,
             "selected_lat": selected_lat,
             "selected_lon": selected_lon,
+            "lat_neighbor_count": POINT_LAT_NEIGHBOR_COUNT,
+            "lon_neighbor_count": POINT_LON_NEIGHBOR_COUNT,
             "lat_half_width": POINT_LAT_HALF_WIDTH,
             "lon_half_width": POINT_LON_HALF_WIDTH,
             "point_lon_canonical": lon_c,
@@ -673,6 +742,8 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     me_plot = build_event_budget_series(me_series)
     rp_plot = build_event_budget_series(rp_series)
+    me_line = refine_time_for_plot(me_plot)
+    rp_line = refine_time_for_plot(rp_plot)
     spike_indices, threshold = detect_precip_spikes(me_plot["Precip"])
     me_events, half_window_steps = build_event_budget_table(me_series, spike_indices)
     rp_events, _ = build_event_budget_table(rp_series, spike_indices)
@@ -685,8 +756,8 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
     time_values = me_plot.time.values
-    me_colL_anom = (me_plot["col_L"] - me_plot["col_L"].mean("time")) * 1.0e-8
-    rp_colL_anom = (rp_plot["col_L"] - rp_plot["col_L"].mean("time")) * 1.0e-8
+    me_line_colL_anom = (me_line["col_L"] - me_line["col_L"].mean("time")) * 1.0e-8
+    rp_line_colL_anom = (rp_line["col_L"] - rp_line["col_L"].mean("time")) * 1.0e-8
     event_labels = [row["spike"] for row in me_events]
     event_x = np.arange(len(event_labels), dtype=float)
     width = 0.18
@@ -716,8 +787,8 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[0]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(time_values, me_plot["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
-    ax.plot(time_values, rp_plot["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
+    ax.plot(me_line.time.values, me_line["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
+    ax.plot(rp_line.time.values, rp_line["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
     ax.scatter(
         time_values[spike_indices],
         me_plot["Precip"].isel(time=spike_indices),
@@ -740,8 +811,8 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(time_values, me_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
-    ax.plot(time_values, rp_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
+    ax.plot(me_line.time.values, me_line_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
+    ax.plot(rp_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"$\langle L_v q \rangle'$ [$10^8$ J m$^{-2}$]")
     ax.set_title("(b) Column moisture reservoir response", loc="left", fontweight="bold")
