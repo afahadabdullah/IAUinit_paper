@@ -30,7 +30,7 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 3
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_STEPS = 1
-PLOT_SMOOTH_STEPS = 3
+EVENT_SMOOTH_HOURS = 24
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -399,10 +399,39 @@ def print_spike_summary(series, spike_indices, name):
         )
 
 
-def smooth_dataset_for_plot(ds, steps=PLOT_SMOOTH_STEPS):
+def infer_time_step_hours(ds):
+    if ds.sizes.get("time", 0) < 2:
+        return 6.0
+    delta = ds.time.diff("time") / np.timedelta64(1, "h")
+    return float(np.nanmedian(delta.values))
+
+
+def smooth_steps_from_hours(ds, target_hours=EVENT_SMOOTH_HOURS):
+    dt_hours = infer_time_step_hours(ds)
+    return max(1, int(round(target_hours / max(dt_hours, 1.0e-6))))
+
+
+def rolling_event_mean(da, steps):
     if steps <= 1:
-        return ds
-    return ds.rolling(time=steps, center=True, min_periods=1).mean()
+        return da
+    min_periods = max(1, steps // 2)
+    return da.rolling(time=steps, center=True, min_periods=min_periods).mean()
+
+
+def build_event_budget_series(ds, smooth_hours=EVENT_SMOOTH_HOURS):
+    steps = smooth_steps_from_hours(ds, smooth_hours)
+    out = xr.Dataset(attrs=dict(ds.attrs))
+    out.attrs["event_smooth_hours"] = float(smooth_hours)
+    out.attrs["event_smooth_steps"] = int(steps)
+
+    out["Precip"] = rolling_event_mean(ds["Precip"], steps)
+    out["LHF"] = rolling_event_mean(ds["LHF"], steps)
+    out["col_L"] = rolling_event_mean(ds["col_L"], steps)
+    out["StorageRelease"] = -out["col_L"].differentiate("time", datetime_unit="s")
+    out["MoistureConvergence"] = out["Precip"] - out["LHF"] - out["StorageRelease"]
+    out["PrecipClosed"] = out["LHF"] + out["MoistureConvergence"] + out["StorageRelease"]
+    out["PrecipResidual"] = out["Precip"] - out["PrecipClosed"]
+    return out
 
 
 # ==============================================================================
@@ -581,13 +610,18 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     if me_series.time.size == 0:
         raise ValueError("No common time points after aligning the two experiments.")
 
-    me_plot = smooth_dataset_for_plot(me_series)
-    rp_plot = smooth_dataset_for_plot(rp_series)
+    me_plot = build_event_budget_series(me_series)
+    rp_plot = build_event_budget_series(rp_series)
     spike_indices, threshold = detect_precip_spikes(me_plot["Precip"])
     plot_label = build_plot_label(me_plot)
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
-    print_spike_summary(me_plot, spike_indices, f"{me_plot.attrs.get('experiment_name', 'Reanalysis-IC')} ({series_kind}, smoothed)")
+    smooth_hours = float(me_plot.attrs["event_smooth_hours"])
+    print_spike_summary(
+        me_plot,
+        spike_indices,
+        f"{me_plot.attrs.get('experiment_name', 'Reanalysis-IC')} ({series_kind}, {smooth_hours:.0f}h event mean)",
+    )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
     time_values = me_plot.time.values
@@ -603,7 +637,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
     fig.subplots_adjust(hspace=0.24, top=0.93)
     fig.suptitle(
-        f"Moisture-budget view of the precipitation spike ({plot_label})",
+        f"Moisture-budget view of the precipitation spike ({plot_label}, {smooth_hours:.0f}h event mean)",
         fontsize=15,
         y=0.98,
     )
