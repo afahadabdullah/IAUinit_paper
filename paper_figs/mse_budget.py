@@ -226,6 +226,9 @@ def collapse_duplicate_times(ds):
 def resample_mean_time(ds, freq):
     sample_var = next(iter(ds.data_vars))
     counts = ds[sample_var].resample(time=freq).count()
+    reduce_dims = [dim for dim in counts.dims if dim != "time"]
+    if reduce_dims:
+        counts = counts.sum(dim=reduce_dims)
     valid_times = counts["time"].where(counts > 0, drop=True)
     return ds.resample(time=freq).mean(keep_attrs=True).sel(time=valid_times)
 
