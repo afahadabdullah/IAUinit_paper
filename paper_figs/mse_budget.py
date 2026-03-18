@@ -23,6 +23,28 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 3
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_STEPS = 1
+FALLBACK_RESAMPLE_FREQ = "6h"
+
+PROG_REQUIRED_VARS = ("T", "QV", "H")
+PROG_OPTIONAL_VARS = ("DELP", "delp", "Dp", "dP", "lev_bnds", "plev_bnds", "p_bnds", "pbnds")
+SURF_REQUIRED_VARS = ("PS", "SWTNET", "OLR", "SWGNET", "LWS", "LHFX", "SHFX")
+SURF_OPTIONAL_VARS = (
+    "PRECTOT",
+    "TPREC",
+    "precip",
+    "LWUP",
+    "LWUP_SFC",
+    "LWGUP",
+    "LWSUP",
+    "LWGEM",
+    "TS",
+    "TSKIN",
+    "TSA",
+    "SST",
+    "SST_FOUND",
+    "TSURF",
+    "T2M",
+)
 
 # Paths
 me_prog = "/nobackupp27/afahad/exp/IAU_exp/GEOSMIT_ME0506/holding/geosgcm_prog/200505/*prog*200505*z.nc4"
@@ -37,7 +59,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v3")
+CACHE_DIR = Path(__file__).with_name("cache_v4")
 
 
 # ==============================================================================
@@ -162,6 +184,28 @@ def box_mean(da):
     return da.weighted(weights).mean(("lat", "lon"))
 
 
+def require_vars(ds, required, label):
+    missing = [name for name in required if name not in ds.variables]
+    if missing:
+        raise ValueError(f"{label} dataset is missing required variables: {missing}")
+
+
+def subset_vars(ds, required, optional, label):
+    require_vars(ds, required, label)
+    keep = list(required) + [name for name in optional if name in ds.variables]
+    return ds[keep]
+
+
+def preprocess_prog(ds):
+    ds = subset_vars(ds, PROG_REQUIRED_VARS, PROG_OPTIONAL_VARS, "prog")
+    return sel_region(ds, LAT_RANGE, LON_RANGE)
+
+
+def preprocess_surf(ds):
+    ds = subset_vars(ds, SURF_REQUIRED_VARS, SURF_OPTIONAL_VARS, "surf")
+    return sel_region(ds, LAT_RANGE, LON_RANGE)
+
+
 def collapse_duplicate_times(ds):
     ds = ds.sortby("time")
     time_vals = np.asarray(ds.time.values)
@@ -177,6 +221,43 @@ def collapse_duplicate_times(ds):
 
     print(f"  -> Collapsed {len(time_vals) - len(unique_times)} duplicate rounded timestamps.")
     return xr.concat(collapsed, dim="time").assign_coords(time=unique_times)
+
+
+def resample_mean_time(ds, freq):
+    sample_var = next(iter(ds.data_vars))
+    counts = ds[sample_var].resample(time=freq).count()
+    valid_times = counts["time"].where(counts > 0, drop=True)
+    return ds.resample(time=freq).mean(keep_attrs=True).sel(time=valid_times)
+
+
+def align_time_axes(state3d, flux2d, name):
+    state3d = collapse_duplicate_times(state3d)
+    flux2d = collapse_duplicate_times(flux2d)
+
+    common_times = np.intersect1d(state3d.time.values, flux2d.time.values)
+    if len(common_times) > 0:
+        print(f"  -> Using native timestamps with {len(common_times)} common times for {name}.")
+        return (
+            state3d.sel(time=common_times),
+            flux2d.sel(time=common_times),
+            "native",
+        )
+
+    print(f"  -> No native timestamp overlap for {name}; resampling both streams to {FALLBACK_RESAMPLE_FREQ}.")
+    state6 = resample_mean_time(state3d, FALLBACK_RESAMPLE_FREQ)
+    flux6 = resample_mean_time(flux2d, FALLBACK_RESAMPLE_FREQ)
+    common_times = np.intersect1d(state6.time.values, flux6.time.values)
+    if len(common_times) == 0:
+        raise ValueError(
+            f"No overlapping windows found for {name} after resampling both datasets to {FALLBACK_RESAMPLE_FREQ}."
+        )
+
+    print(f"  -> Using {FALLBACK_RESAMPLE_FREQ} resampled alignment with {len(common_times)} common times.")
+    return (
+        state6.sel(time=common_times),
+        flux6.sel(time=common_times),
+        FALLBACK_RESAMPLE_FREQ,
+    )
 
 
 def detect_precip_spikes(precip, quantile=SPIKE_QUANTILE, min_separation=MIN_PEAK_SEPARATION, max_spikes=MAX_SPIKES):
@@ -274,28 +355,28 @@ def compute_mse_budget(f_prog, f_surf, name):
 
     print(f"Loading {name} data from experiments...")
     with dask.config.set(scheduler="single-threaded"):
-        ds_prog = xr.open_mfdataset(f_prog, parallel=False).sel(time=slice("2005-04-30", "2005-05-31"))
-        ds_surf = xr.open_mfdataset(f_surf, parallel=False).sel(time=slice("2005-04-30", "2005-05-31"))
+        ds_prog = xr.open_mfdataset(
+            f_prog,
+            parallel=False,
+            combine="by_coords",
+            preprocess=preprocess_prog,
+            chunks={"time": 8},
+        ).sel(time=slice("2005-04-30", "2005-05-31"))
+        ds_surf = xr.open_mfdataset(
+            f_surf,
+            parallel=False,
+            combine="by_coords",
+            preprocess=preprocess_surf,
+            chunks={"time": 8},
+        ).sel(time=slice("2005-04-30", "2005-05-31"))
 
-        state3d = sel_region(ds_prog, LAT_RANGE, LON_RANGE).load()
-        flux2d = sel_region(ds_surf, LAT_RANGE, LON_RANGE).load()
+        state3d = ds_prog
+        flux2d = ds_surf
 
     if state3d.time.size == 0 or flux2d.time.size == 0:
         raise ValueError(f"Empty dataset after load for {name}. state3d={state3d.time.size}, flux2d={flux2d.time.size}")
 
-    print(f"  -> Snapping {name} timestamps to nearest 6h and aligning...")
-    state3d["time"] = state3d.time.dt.round("6h")
-    flux2d["time"] = flux2d.time.dt.round("6h")
-
-    state3d = collapse_duplicate_times(state3d)
-    flux2d = collapse_duplicate_times(flux2d)
-
-    common_times = np.intersect1d(state3d.time, flux2d.time)
-    if len(common_times) == 0:
-        raise ValueError(f"No overlapping 6-hour windows found for {name}.")
-
-    state3d = state3d.sel(time=common_times)
-    flux2d = flux2d.sel(time=common_times)
+    state3d, flux2d, align_freq = align_time_axes(state3d, flux2d, name)
 
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(FOCUS_START, FOCUS_END))
@@ -306,7 +387,7 @@ def compute_mse_budget(f_prog, f_surf, name):
     flux2d = ds
     print(
         f"  -> Synchronized {len(ds.time)} steps for {name} "
-        f"({ds.time.min().values} to {ds.time.max().values})"
+        f"({ds.time.min().values} to {ds.time.max().values}) using {align_freq} alignment"
     )
 
     lev_dim = get_lev_dim(state3d)
