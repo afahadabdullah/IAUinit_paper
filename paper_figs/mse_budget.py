@@ -1,6 +1,6 @@
+import glob
 from pathlib import Path
 
-import dask
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -59,7 +59,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v4")
+CACHE_DIR = Path(__file__).with_name("cache_v5")
 
 
 # ==============================================================================
@@ -204,6 +204,31 @@ def preprocess_prog(ds):
 def preprocess_surf(ds):
     ds = subset_vars(ds, SURF_REQUIRED_VARS, SURF_OPTIONAL_VARS, "surf")
     return sel_region(ds, LAT_RANGE, LON_RANGE)
+
+
+def load_serial_subset(file_pattern, preprocess, label, time_start="2005-04-30", time_end="2005-05-31"):
+    files = sorted(glob.glob(file_pattern))
+    if not files:
+        raise ValueError(f"No files matched for {label}: {file_pattern}")
+
+    pieces = []
+    print(f"  -> Opening {len(files)} {label} files serially...")
+    for idx, path in enumerate(files, start=1):
+        with xr.open_dataset(path, engine="netcdf4", cache=False) as ds:
+            ds = preprocess(ds)
+            ds = ds.sel(time=slice(time_start, time_end))
+            if ds.sizes.get("time", 0) == 0:
+                continue
+            pieces.append(ds.load())
+
+        if idx == 1 or idx == len(files) or idx % 10 == 0:
+            print(f"     loaded {idx}/{len(files)} {label} files")
+
+    if not pieces:
+        raise ValueError(f"All {label} files were empty after subsetting {time_start} to {time_end}.")
+
+    out = xr.concat(pieces, dim="time", data_vars="minimal", coords="minimal", compat="override", combine_attrs="override")
+    return out.sortby("time")
 
 
 def collapse_duplicate_times(ds):
@@ -357,24 +382,8 @@ def compute_mse_budget(f_prog, f_surf, name):
         return xr.open_dataset(pt_file).load(), xr.open_dataset(box_file).load()
 
     print(f"Loading {name} data from experiments...")
-    with dask.config.set(scheduler="single-threaded"):
-        ds_prog = xr.open_mfdataset(
-            f_prog,
-            parallel=False,
-            combine="by_coords",
-            preprocess=preprocess_prog,
-            chunks={"time": 8},
-        ).sel(time=slice("2005-04-30", "2005-05-31"))
-        ds_surf = xr.open_mfdataset(
-            f_surf,
-            parallel=False,
-            combine="by_coords",
-            preprocess=preprocess_surf,
-            chunks={"time": 8},
-        ).sel(time=slice("2005-04-30", "2005-05-31"))
-
-        state3d = ds_prog
-        flux2d = ds_surf
+    state3d = load_serial_subset(f_prog, preprocess_prog, f"{name} prog")
+    flux2d = load_serial_subset(f_surf, preprocess_surf, f"{name} surf")
 
     if state3d.time.size == 0 or flux2d.time.size == 0:
         raise ValueError(f"Empty dataset after load for {name}. state3d={state3d.time.size}, flux2d={flux2d.time.size}")
