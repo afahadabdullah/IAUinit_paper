@@ -32,6 +32,8 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 3
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
+LOWER_PANEL_HOURS_BEFORE = 24
+LOWER_PANEL_HOURS_AFTER = 48
 EVENT_SMOOTH_HOURS = 24
 BUDGET_SMOOTH_HOURS = 48
 FALLBACK_RESAMPLE_FREQ = "6h"
@@ -790,6 +792,19 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     half_window_steps = half_window_steps_from_hours(me_series)
     plot_label = build_plot_label(me_precip_plot)
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
+    if len(spike_indices) > 0:
+        spike_values = np.asarray(me_precip_plot["Precip"].isel(time=spike_indices).values, dtype=float)
+        dominant_idx = int(spike_indices[int(np.nanargmax(spike_values))])
+    else:
+        dominant_idx = int(np.nanargmax(np.asarray(me_precip_plot["Precip"].values, dtype=float)))
+
+    full_start = me_precip_plot.time.values[0].astype("datetime64[h]")
+    full_end = me_precip_plot.time.values[-1].astype("datetime64[h]")
+    focus_center = me_precip_plot.time.values[dominant_idx].astype("datetime64[h]")
+    left_candidate = focus_center - np.timedelta64(LOWER_PANEL_HOURS_BEFORE, "h")
+    right_candidate = focus_center + np.timedelta64(LOWER_PANEL_HOURS_AFTER, "h")
+    focus_start = full_start if full_start > left_candidate else left_candidate
+    focus_end = full_end if full_end < right_candidate else right_candidate
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
     print_spike_summary(
@@ -801,6 +816,10 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
+    print(
+        "  Budget panels focus on dominant spike window: "
+        f"{np.datetime_as_string(focus_start, unit='h')} to {np.datetime_as_string(focus_end, unit='h')}"
+    )
 
     time_values = me_precip_plot.time.values
     me_line_colL_anom = (me_budget_line["col_L"] - me_budget_line["col_L"].mean("time")) * 1.0e-8
@@ -811,7 +830,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     diff_storage = me_budget_line["StorageRelease"] - rp_budget_line["StorageRelease"]
     diff_closed = me_budget_line["PrecipClosed"] - rp_budget_line["PrecipClosed"]
 
-    fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=False)
     fig.subplots_adjust(hspace=0.24, top=0.93)
     fig.suptitle(
         (
@@ -894,7 +913,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         zorder=5,
     )[0]
     ax.set_ylabel(r"W m$^{-2}$")
-    ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
+    ax.set_title("(b) Reanalysis-IC moisture source decomposition near S1", loc="left", fontweight="bold")
     ax.legend(
         [line_precip, line_closed, line_lhf, line_mc, line_storage],
         [line_precip.get_label(), line_closed.get_label(), line_lhf.get_label(), line_mc.get_label(), line_storage.get_label()],
@@ -910,7 +929,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     ax.plot(rp_budget_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"$\langle L_v q \rangle'$ [$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture reservoir response", loc="left", fontweight="bold")
+    ax.set_title("(c) Column moisture reservoir response near S1", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
@@ -962,7 +981,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     )[0]
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[W m$^{-2}$]")
-    ax.set_title("(d) What makes the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
+    ax.set_title("(d) What makes the Reanalysis-IC spike larger near S1?", loc="left", fontweight="bold")
     ax.legend(
         [diff_line_precip, diff_line_closed, diff_line_lhf, diff_line_mc, diff_line_storage],
         [
@@ -982,9 +1001,17 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         ax.grid(True, linestyle=":", alpha=0.6)
         ax.tick_params(axis="both", labelsize=10)
 
-    axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=1))
-    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    axes[-1].set_xlabel("Time (May 2005)")
+    for ax in axes:
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+
+    for ax in axes[1:]:
+        ax.set_xlim(focus_start, focus_end)
+
+    axes[0].set_xlabel("Time (May 2005)")
+    axes[1].tick_params(labelbottom=False)
+    axes[2].tick_params(labelbottom=False)
+    axes[-1].set_xlabel("Time Around Dominant Spike")
 
     plt.savefig(output_fig, dpi=300, bbox_inches="tight")
     plt.close(fig)
