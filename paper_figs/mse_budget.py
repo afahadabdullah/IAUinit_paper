@@ -20,8 +20,8 @@ LON_RANGE = (140.0, 170.0)
 PT_LON, PT_LAT = 143.0, -1.0
 POINT_LAT_HALF_WIDTH = 1.5
 POINT_LON_HALF_WIDTH = 1.5
-POINT_LAT_NEIGHBOR_COUNT = 7
-POINT_LON_NEIGHBOR_COUNT = 7
+POINT_LAT_NEIGHBOR_COUNT = 1
+POINT_LON_NEIGHBOR_COUNT = 1
 FOCUS_START = "2005-05-06"
 FOCUS_END = "2005-05-14"
 
@@ -29,13 +29,13 @@ FOCUS_END = "2005-05-14"
 SERIES_KIND = "point"
 
 SPIKE_QUANTILE = 0.90
-MAX_SPIKES = 3
+MAX_SPIKES = 1
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
 LOWER_PANEL_HOURS_BEFORE = 24
 LOWER_PANEL_HOURS_AFTER = 48
-EVENT_SMOOTH_HOURS = 0
-BUDGET_SMOOTH_HOURS = 0
+EVENT_SMOOTH_HOURS = 6
+BUDGET_SMOOTH_HOURS = 12
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -72,7 +72,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v7")
+CACHE_DIR = Path(__file__).with_name("cache_v8")
 
 
 # ==============================================================================
@@ -233,6 +233,8 @@ def point_neighbor_metadata(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LA
         "lat_points_used": int(subset.sizes.get("lat", 0)),
         "lon_points_used": int(subset.sizes.get("lon", 0)),
         "grid_count_used": int(subset.sizes.get("lat", 0) * subset.sizes.get("lon", 0)),
+        "selected_lat_used": float(subset["lat"].mean().values),
+        "selected_lon_used": float(subset["lon"].mean().values),
         "lat_min_used": float(subset["lat"].min().values),
         "lat_max_used": float(subset["lat"].max().values),
         "lon_min_used": float(subset["lon"].min().values),
@@ -408,9 +410,12 @@ def build_plot_label(ds):
     if ds.attrs.get("series_kind") == "point":
         lat_neighbor_count = int(ds.attrs.get("lat_neighbor_count", POINT_LAT_NEIGHBOR_COUNT))
         lon_neighbor_count = int(ds.attrs.get("lon_neighbor_count", POINT_LON_NEIGHBOR_COUNT))
+        grid_count = int(ds.attrs.get("grid_count_used", lat_neighbor_count * lon_neighbor_count))
         lon_half_width = float(ds.attrs.get("lon_half_width", POINT_LON_HALF_WIDTH))
         lat_half_width = float(ds.attrs.get("lat_half_width", POINT_LAT_HALF_WIDTH))
         if "lat_neighbor_count" in ds.attrs or "lon_neighbor_count" in ds.attrs:
+            if grid_count == 1:
+                return f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} nearest grid cell"
             return (
                 f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])} "
                 f"{lat_neighbor_count}x{lon_neighbor_count} neighbor mean"
@@ -440,6 +445,16 @@ def print_series_averaging_info(ds, label):
     lat_max = ds.attrs.get("lat_max_used")
     lon_min = ds.attrs.get("lon_min_used")
     lon_max = ds.attrs.get("lon_max_used")
+    selected_lat = ds.attrs.get("selected_lat_used")
+    selected_lon = ds.attrs.get("selected_lon_used")
+
+    if grid_count == 1 and None not in (selected_lat, selected_lon):
+        print(
+            f"  -> {label} point series uses the nearest grid cell to "
+            f"{format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])}: "
+            f"{format_lon_lat(float(selected_lon), float(selected_lat))}."
+        )
+        return
 
     print(
         f"  -> {label} point series averages {lat_points} lat x {lon_points} lon = "
