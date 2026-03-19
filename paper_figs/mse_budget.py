@@ -22,8 +22,10 @@ POINT_LAT_HALF_WIDTH = 1.5
 POINT_LON_HALF_WIDTH = 1.5
 POINT_LAT_NEIGHBOR_COUNT = 1
 POINT_LON_NEIGHBOR_COUNT = 1
-FOCUS_START = "2005-05-06"
-FOCUS_END = "2005-05-14"
+ANALYSIS_START = "2005-05-05"
+ANALYSIS_END = "2005-05-15"
+PLOT_START = "2005-05-06"
+PLOT_END = "2005-05-14"
 
 # Choose "point" for the spike location or "box" for the regional mean.
 SERIES_KIND = "point"
@@ -35,7 +37,7 @@ SPIKE_WINDOW_HOURS = 24
 LOWER_PANEL_HOURS_BEFORE = 24
 LOWER_PANEL_HOURS_AFTER = 48
 EVENT_SMOOTH_HOURS = 6
-BUDGET_SMOOTH_HOURS = 12
+BUDGET_SMOOTH_HOURS = 24
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -72,7 +74,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v8")
+CACHE_DIR = Path(__file__).with_name("cache_v9")
 
 
 # ==============================================================================
@@ -638,9 +640,9 @@ def compute_mse_budget(f_prog, f_surf, name):
     state3d, flux2d, align_freq = align_time_axes(state3d, flux2d, name)
 
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
-    ds = ds.sel(time=slice(FOCUS_START, FOCUS_END))
+    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
     if ds.time.size == 0:
-        raise ValueError(f"No data inside focus window {FOCUS_START} to {FOCUS_END} for {name}.")
+        raise ValueError(f"No data inside analysis window {ANALYSIS_START} to {ANALYSIS_END} for {name}.")
 
     state3d = ds
     flux2d = ds
@@ -1031,6 +1033,9 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     for ax in axes[1:]:
         ax.set_xlim(focus_start, focus_end)
 
+    plot_start = np.datetime64(PLOT_START)
+    plot_end = np.datetime64(PLOT_END) + np.timedelta64(23, "h")
+    axes[0].set_xlim(plot_start, plot_end)
     axes[0].set_xlabel("Time (May 2005)")
     axes[1].tick_params(labelbottom=False)
     axes[2].tick_params(labelbottom=False)
