@@ -20,8 +20,8 @@ LON_RANGE = (140.0, 170.0)
 PT_LON, PT_LAT = 143.0, -1.0
 POINT_LAT_HALF_WIDTH = 1.5
 POINT_LON_HALF_WIDTH = 1.5
-POINT_LAT_NEIGHBOR_COUNT = 3
-POINT_LON_NEIGHBOR_COUNT = 3
+POINT_LAT_NEIGHBOR_COUNT = 7
+POINT_LON_NEIGHBOR_COUNT = 7
 FOCUS_START = "2005-05-06"
 FOCUS_END = "2005-05-14"
 
@@ -70,7 +70,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v6")
+CACHE_DIR = Path(__file__).with_name("cache_v7")
 
 
 # ==============================================================================
