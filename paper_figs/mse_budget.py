@@ -34,8 +34,8 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 1
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
-LOWER_PANEL_HOURS_BEFORE = 24
-LOWER_PANEL_HOURS_AFTER = 48
+LOWER_PANEL_HOURS_BEFORE = 12
+LOWER_PANEL_HOURS_AFTER = 24
 EVENT_SMOOTH_HOURS = 6
 BUDGET_SMOOTH_HOURS = 24
 FALLBACK_RESAMPLE_FREQ = "6h"
@@ -969,7 +969,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         zorder=5,
     )[0]
     ax.set_ylabel(r"MJ m$^{-2}$")
-    ax.set_title("(b) Reanalysis-IC cumulative moisture budget near S1", loc="left", fontweight="bold")
+    ax.set_title("(b) Cumulative moisture budget at S1", loc="left", fontweight="bold")
     ax.legend(
         [line_precip, line_closed, line_lhf, line_mc, line_storage],
         [line_precip.get_label(), line_closed.get_label(), line_lhf.get_label(), line_mc.get_label(), line_storage.get_label()],
@@ -985,7 +985,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     ax.plot(rp_budget_focus.time.values, rp_line_colL_change, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"$\Delta\langle L_v q \rangle$ [$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture change from S1-window start", loc="left", fontweight="bold")
+    ax.set_title("(c) Column moisture change at S1", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
@@ -1037,7 +1037,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     )[0]
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(d) Cumulative source of the larger Reanalysis-IC spike near S1", loc="left", fontweight="bold")
+    ax.set_title("(d) Why is the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
     ax.legend(
         [diff_line_precip, diff_line_closed, diff_line_lhf, diff_line_mc, diff_line_storage],
         [
@@ -1070,7 +1070,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     axes[0].set_xlabel("Time (May 2005)")
     axes[1].tick_params(labelbottom=False)
     axes[2].tick_params(labelbottom=False)
-    axes[-1].set_xlabel("Time Around Dominant Spike")
+    axes[-1].set_xlabel("Time Around S1")
 
     plt.savefig(output_fig, dpi=300, bbox_inches="tight")
     plt.close(fig)
