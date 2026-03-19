@@ -33,6 +33,7 @@ MAX_SPIKES = 3
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
 EVENT_SMOOTH_HOURS = 24
+BUDGET_SMOOTH_HOURS = 48
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -740,47 +741,59 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     if me_series.time.size == 0:
         raise ValueError("No common time points after aligning the two experiments.")
 
-    me_plot = build_event_budget_series(me_series)
-    rp_plot = build_event_budget_series(rp_series)
-    me_line = refine_time_for_plot(me_plot)
-    rp_line = refine_time_for_plot(rp_plot)
-    spike_indices, threshold = detect_precip_spikes(me_plot["Precip"])
+    me_precip_plot = build_event_budget_series(me_series, smooth_hours=EVENT_SMOOTH_HOURS)
+    rp_precip_plot = build_event_budget_series(rp_series, smooth_hours=EVENT_SMOOTH_HOURS)
+    me_budget_plot = build_event_budget_series(me_series, smooth_hours=BUDGET_SMOOTH_HOURS)
+    rp_budget_plot = build_event_budget_series(rp_series, smooth_hours=BUDGET_SMOOTH_HOURS)
+
+    me_precip_line = refine_time_for_plot(me_precip_plot)
+    rp_precip_line = refine_time_for_plot(rp_precip_plot)
+    me_budget_line = refine_time_for_plot(me_budget_plot)
+    rp_budget_line = refine_time_for_plot(rp_budget_plot)
+
+    spike_indices, threshold = detect_precip_spikes(me_precip_plot["Precip"])
     half_window_steps = half_window_steps_from_hours(me_series)
-    plot_label = build_plot_label(me_plot)
+    plot_label = build_plot_label(me_precip_plot)
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
-    smooth_hours = float(me_plot.attrs["event_smooth_hours"])
+    smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
     print_spike_summary(
-        me_plot,
+        me_budget_plot,
         spike_indices,
-        f"{me_plot.attrs.get('experiment_name', 'Reanalysis-IC')} ({series_kind}, {smooth_hours:.0f}h tapered smooth)",
+        (
+            f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} "
+            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+        ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
-    time_values = me_plot.time.values
-    me_line_colL_anom = (me_line["col_L"] - me_line["col_L"].mean("time")) * 1.0e-8
-    rp_line_colL_anom = (rp_line["col_L"] - rp_line["col_L"].mean("time")) * 1.0e-8
-    diff_precip = me_line["Precip"] - rp_line["Precip"]
-    diff_lhf = me_line["LHF"] - rp_line["LHF"]
-    diff_conv = me_line["MoistureConvergence"] - rp_line["MoistureConvergence"]
-    diff_storage = me_line["StorageRelease"] - rp_line["StorageRelease"]
-    diff_closed = me_line["PrecipClosed"] - rp_line["PrecipClosed"]
+    time_values = me_precip_plot.time.values
+    me_line_colL_anom = (me_budget_line["col_L"] - me_budget_line["col_L"].mean("time")) * 1.0e-8
+    rp_line_colL_anom = (rp_budget_line["col_L"] - rp_budget_line["col_L"].mean("time")) * 1.0e-8
+    diff_precip = me_budget_line["Precip"] - rp_budget_line["Precip"]
+    diff_lhf = me_budget_line["LHF"] - rp_budget_line["LHF"]
+    diff_conv = me_budget_line["MoistureConvergence"] - rp_budget_line["MoistureConvergence"]
+    diff_storage = me_budget_line["StorageRelease"] - rp_budget_line["StorageRelease"]
+    diff_closed = me_budget_line["PrecipClosed"] - rp_budget_line["PrecipClosed"]
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
     fig.subplots_adjust(hspace=0.24, top=0.93)
     fig.suptitle(
-        f"Moisture-budget view of the precipitation spike ({plot_label}, {smooth_hours:.0f}h tapered smooth)",
+        (
+            f"Moisture-budget view of the precipitation spike "
+            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+        ),
         fontsize=15,
         y=0.98,
     )
 
     ax = axes[0]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_line.time.values, me_line["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
-    ax.plot(rp_line.time.values, rp_line["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
+    ax.plot(me_precip_line.time.values, me_precip_line["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
+    ax.plot(rp_precip_line.time.values, rp_precip_line["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
     ax.scatter(
         time_values[spike_indices],
-        me_plot["Precip"].isel(time=spike_indices),
+        me_precip_plot["Precip"].isel(time=spike_indices),
         color="navy",
         s=34,
         zorder=5,
@@ -788,7 +801,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     for n, idx in enumerate(spike_indices, start=1):
         ax.annotate(
             f"S{n}",
-            (time_values[idx], float(me_plot["Precip"].isel(time=idx))),
+            (time_values[idx], float(me_precip_plot["Precip"].isel(time=idx))),
             xytext=(0, 8),
             textcoords="offset points",
             ha="center",
@@ -800,19 +813,19 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_line.time.values, me_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
-    ax.plot(me_line.time.values, me_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
-    ax.plot(me_line.time.values, me_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
-    ax.plot(me_line.time.values, me_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
-    ax.plot(me_line.time.values, me_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
+    ax.plot(me_budget_line.time.values, me_budget_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
+    ax.plot(me_budget_line.time.values, me_budget_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
+    ax.plot(me_budget_line.time.values, me_budget_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
+    ax.plot(me_budget_line.time.values, me_budget_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
+    ax.plot(me_budget_line.time.values, me_budget_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
     ax.set_ylabel(r"W m$^{-2}$")
     ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     ax = axes[2]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_line.time.values, me_line_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
-    ax.plot(rp_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
+    ax.plot(me_budget_line.time.values, me_line_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
+    ax.plot(rp_budget_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"$\langle L_v q \rangle'$ [$10^8$ J m$^{-2}$]")
     ax.set_title("(c) Column moisture reservoir response", loc="left", fontweight="bold")
@@ -820,11 +833,11 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[3]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$")
-    ax.plot(me_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$")
-    ax.plot(me_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence")
-    ax.plot(me_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release")
-    ax.plot(me_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$")
+    ax.plot(me_budget_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$")
+    ax.plot(me_budget_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$")
+    ax.plot(me_budget_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence")
+    ax.plot(me_budget_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release")
+    ax.plot(me_budget_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[W m$^{-2}$]")
     ax.set_title("(d) What makes the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
