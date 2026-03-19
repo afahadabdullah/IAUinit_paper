@@ -34,8 +34,8 @@ MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
 LOWER_PANEL_HOURS_BEFORE = 24
 LOWER_PANEL_HOURS_AFTER = 48
-EVENT_SMOOTH_HOURS = 24
-BUDGET_SMOOTH_HOURS = 48
+EVENT_SMOOTH_HOURS = 0
+BUDGET_SMOOTH_HOURS = 0
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -420,6 +420,12 @@ def build_plot_label(ds):
             f"+/-{lon_half_width:.1f}deg lon, +/-{lat_half_width:.1f}deg lat"
         )
     return f"{LAT_RANGE[0]:.0f} to {LAT_RANGE[1]:.0f} lat, {LON_RANGE[0]:.0f} to {LON_RANGE[1]:.0f} lon box mean"
+
+
+def smoothing_label(hours):
+    if float(hours) <= 0.0:
+        return "native time"
+    return f"{float(hours):.0f}h smooth"
 
 
 def print_series_averaging_info(ds, label):
@@ -807,12 +813,14 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     focus_end = full_end if full_end < right_candidate else right_candidate
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
+    precip_smooth_text = smoothing_label(EVENT_SMOOTH_HOURS)
+    budget_smooth_text = smoothing_label(smooth_hours)
     print_spike_summary(
         me_budget_plot,
         spike_indices,
         (
             f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} "
-            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+            f"({series_kind}, precip {precip_smooth_text} / budget {budget_smooth_text})"
         ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
@@ -835,7 +843,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     fig.suptitle(
         (
             f"Moisture-budget view of the precipitation spike "
-            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+            f"({plot_label}, precip {precip_smooth_text} / budget {budget_smooth_text})"
         ),
         fontsize=15,
         y=0.98,
