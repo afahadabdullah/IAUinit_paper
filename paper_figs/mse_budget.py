@@ -34,7 +34,6 @@ MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
 EVENT_SMOOTH_HOURS = 24
 BUDGET_SMOOTH_HOURS = 48
-BACKGROUND_SMOOTH_HOURS = 120
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -71,7 +70,7 @@ cp = 1004.0
 Lv = 2.5e6
 sigma = 5.670374419e-8
 
-CACHE_DIR = Path(__file__).with_name("cache_v5")
+CACHE_DIR = Path(__file__).with_name("cache_v6")
 
 
 # ==============================================================================
@@ -216,26 +215,32 @@ def nearest_coord_values(coord, target, count, is_lon=False):
     return values[idx]
 
 
-def point_neighbor_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LAT_NEIGHBOR_COUNT, lon_count=POINT_LON_NEIGHBOR_COUNT):
+def point_neighbor_subset(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LAT_NEIGHBOR_COUNT, lon_count=POINT_LON_NEIGHBOR_COUNT):
     lon_target = canon_lon(pt_lon, da["lon"])
     lat_vals = nearest_coord_values(da["lat"], pt_lat, lat_count, is_lon=False)
     lon_vals = nearest_coord_values(da["lon"], lon_target, lon_count, is_lon=True)
     subset = da.sel(lat=lat_vals, lon=lon_vals)
     if subset.sizes.get("lat", 0) == 0 or subset.sizes.get("lon", 0) == 0:
         raise ValueError("Point-neighbor mean selection returned no grid cells.")
+    return subset
 
-    lat_dist = xr.DataArray(np.abs(subset["lat"].values - pt_lat), dims=("lat",), coords={"lat": subset["lat"]})
-    lon_dist = xr.DataArray(
-        lon_distance_deg(subset["lon"].values.astype(float), lon_target),
-        dims=("lon",),
-        coords={"lon": subset["lon"]},
-    )
-    lat_scale = max(float(lat_dist.min()), 1.0)
-    lon_scale = max(float(lon_dist.min()), 1.0)
-    lat_w = np.exp(-0.5 * (lat_dist / lat_scale) ** 2) * np.cos(np.deg2rad(subset["lat"]))
-    lon_w = np.exp(-0.5 * (lon_dist / lon_scale) ** 2)
-    weights = lat_w * lon_w
-    return subset.weighted(weights).mean(("lat", "lon"))
+
+def point_neighbor_metadata(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LAT_NEIGHBOR_COUNT, lon_count=POINT_LON_NEIGHBOR_COUNT):
+    subset = point_neighbor_subset(da, pt_lon=pt_lon, pt_lat=pt_lat, lat_count=lat_count, lon_count=lon_count)
+    return {
+        "lat_points_used": int(subset.sizes.get("lat", 0)),
+        "lon_points_used": int(subset.sizes.get("lon", 0)),
+        "grid_count_used": int(subset.sizes.get("lat", 0) * subset.sizes.get("lon", 0)),
+        "lat_min_used": float(subset["lat"].min().values),
+        "lat_max_used": float(subset["lat"].max().values),
+        "lon_min_used": float(subset["lon"].min().values),
+        "lon_max_used": float(subset["lon"].max().values),
+    }
+
+
+def point_neighbor_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lat_count=POINT_LAT_NEIGHBOR_COUNT, lon_count=POINT_LON_NEIGHBOR_COUNT):
+    subset = point_neighbor_subset(da, pt_lon=pt_lon, pt_lat=pt_lat, lat_count=lat_count, lon_count=lon_count)
+    return area_mean(subset)
 
 
 def point_box_mean(da, pt_lon=PT_LON, pt_lat=PT_LAT, lon_half_width=POINT_LON_HALF_WIDTH, lat_half_width=POINT_LAT_HALF_WIDTH):
@@ -415,6 +420,30 @@ def build_plot_label(ds):
     return f"{LAT_RANGE[0]:.0f} to {LAT_RANGE[1]:.0f} lat, {LON_RANGE[0]:.0f} to {LON_RANGE[1]:.0f} lon box mean"
 
 
+def print_series_averaging_info(ds, label):
+    if ds.attrs.get("series_kind") != "point":
+        print(f"  -> {label} uses the full lat/lon box mean over the analysis region.")
+        return
+
+    lat_points = int(ds.attrs.get("lat_points_used", ds.attrs.get("lat_neighbor_count", POINT_LAT_NEIGHBOR_COUNT)))
+    lon_points = int(ds.attrs.get("lon_points_used", ds.attrs.get("lon_neighbor_count", POINT_LON_NEIGHBOR_COUNT)))
+    grid_count = int(ds.attrs.get("grid_count_used", lat_points * lon_points))
+    lat_min = ds.attrs.get("lat_min_used")
+    lat_max = ds.attrs.get("lat_max_used")
+    lon_min = ds.attrs.get("lon_min_used")
+    lon_max = ds.attrs.get("lon_max_used")
+
+    print(
+        f"  -> {label} point series averages {lat_points} lat x {lon_points} lon = "
+        f"{grid_count} grid cells near {format_lon_lat(ds.attrs['requested_lon'], ds.attrs['requested_lat'])}."
+    )
+    if None not in (lat_min, lat_max, lon_min, lon_max):
+        print(
+            f"     lat range used: {lat_min:.2f} to {lat_max:.2f}, "
+            f"lon range used: {lon_min:.2f} to {lon_max:.2f}"
+        )
+
+
 def print_spike_summary(series, spike_indices, name):
     print(f"\n{name} spike summary")
     for spike_id, idx in enumerate(spike_indices, start=1):
@@ -476,13 +505,6 @@ def rolling_event_mean(da, steps):
     num = (rolled.fillna(0.0) * weight_da).sum("window")
     den = (valid.astype(float) * weight_da).sum("window")
     return xr.where(den > 0.0, num / den, np.nan)
-
-
-def trailing_baseline_mean(da, steps):
-    if steps <= 1:
-        return da.shift(time=1)
-    min_periods = max(1, steps // 2)
-    return da.shift(time=1).rolling(time=steps, center=False, min_periods=min_periods).mean()
 
 
 def refine_time_for_plot(ds, spacing_hours=1):
@@ -569,23 +591,6 @@ def build_event_budget_series(ds, smooth_hours=EVENT_SMOOTH_HOURS):
     out["PrecipClosed"] = out["LHF"] + out["MoistureConvergence"] + out["StorageRelease"]
     out["PrecipResidual"] = out["Precip"] - out["PrecipClosed"]
     return out
-
-
-def build_budget_excess_series(ds, event_smooth_hours=BUDGET_SMOOTH_HOURS, background_smooth_hours=BACKGROUND_SMOOTH_HOURS):
-    fast = build_event_budget_series(ds, smooth_hours=event_smooth_hours)
-    background_steps = smooth_steps_from_hours(ds, background_smooth_hours)
-
-    excess = xr.Dataset(coords={"time": fast["time"]}, attrs=dict(ds.attrs))
-    for name in fast.data_vars:
-        background = trailing_baseline_mean(fast[name], background_steps)
-        excess[name] = fast[name] - background
-
-    excess.attrs["event_smooth_hours"] = float(event_smooth_hours)
-    excess.attrs["background_lookback_hours"] = float(background_smooth_hours)
-    excess.attrs["background_mode"] = "trailing"
-    excess.attrs["event_smooth_steps"] = int(fast.attrs.get("event_smooth_steps", smooth_steps_from_hours(ds, event_smooth_hours)))
-    excess.attrs["background_steps"] = int(background_steps)
-    return excess
 
 
 # ==============================================================================
@@ -713,6 +718,7 @@ def compute_mse_budget(f_prog, f_surf, name):
     }
 
     lon_c = canon_lon(PT_LON, flux2d.lon)
+    neighbor_meta = point_neighbor_metadata(Hnet)
     lat_rng = (PT_LAT - POINT_LAT_HALF_WIDTH, PT_LAT + POINT_LAT_HALF_WIDTH)
     lon_rng = (PT_LON - POINT_LON_HALF_WIDTH, PT_LON + POINT_LON_HALF_WIDTH)
     template = sel_region(Hnet, lat_rng, lon_rng)
@@ -733,6 +739,7 @@ def compute_mse_budget(f_prog, f_surf, name):
             "lon_half_width": POINT_LON_HALF_WIDTH,
             "point_lon_canonical": lon_c,
             "experiment_name": name,
+            **neighbor_meta,
         },
     )
 
@@ -766,19 +773,18 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     if me_series.time.size == 0:
         raise ValueError("No common time points after aligning the two experiments.")
 
+    print_series_averaging_info(me_series, me_series.attrs.get("experiment_name", "Reanalysis-IC"))
+    print_series_averaging_info(rp_series, rp_series.attrs.get("experiment_name", "IAU-IC"))
+
     me_precip_plot = build_event_budget_series(me_series, smooth_hours=EVENT_SMOOTH_HOURS)
     rp_precip_plot = build_event_budget_series(rp_series, smooth_hours=EVENT_SMOOTH_HOURS)
     me_budget_plot = build_event_budget_series(me_series, smooth_hours=BUDGET_SMOOTH_HOURS)
     rp_budget_plot = build_event_budget_series(rp_series, smooth_hours=BUDGET_SMOOTH_HOURS)
-    me_excess_plot = build_budget_excess_series(me_series)
-    rp_excess_plot = build_budget_excess_series(rp_series)
 
     me_precip_line = refine_time_for_plot(me_precip_plot)
     rp_precip_line = refine_time_for_plot(rp_precip_plot)
     me_budget_line = refine_time_for_plot(me_budget_plot)
     rp_budget_line = refine_time_for_plot(rp_budget_plot)
-    me_excess_line = refine_time_for_plot(me_excess_plot)
-    rp_excess_line = refine_time_for_plot(rp_excess_plot)
 
     spike_indices, threshold = detect_precip_spikes(me_precip_plot["Precip"])
     half_window_steps = half_window_steps_from_hours(me_series)
@@ -786,34 +792,31 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
-    background_hours = float(me_excess_plot.attrs["background_lookback_hours"])
     print_spike_summary(
         me_budget_plot,
         spike_indices,
         (
             f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} "
-            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
-            f"{smooth_hours:.0f}h budget / {background_hours:.0f}h trailing baseline)"
+            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
         ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
     time_values = me_precip_plot.time.values
-    me_line_colL_excess = me_excess_line["col_L"] * 1.0e-8
-    rp_line_colL_excess = rp_excess_line["col_L"] * 1.0e-8
-    diff_precip = me_excess_line["Precip"] - rp_excess_line["Precip"]
-    diff_lhf = me_excess_line["LHF"] - rp_excess_line["LHF"]
-    diff_conv = me_excess_line["MoistureConvergence"] - rp_excess_line["MoistureConvergence"]
-    diff_storage = me_excess_line["StorageRelease"] - rp_excess_line["StorageRelease"]
-    diff_closed = me_excess_line["PrecipClosed"] - rp_excess_line["PrecipClosed"]
+    me_line_colL_anom = (me_budget_line["col_L"] - me_budget_line["col_L"].mean("time")) * 1.0e-8
+    rp_line_colL_anom = (rp_budget_line["col_L"] - rp_budget_line["col_L"].mean("time")) * 1.0e-8
+    diff_precip = me_budget_line["Precip"] - rp_budget_line["Precip"]
+    diff_lhf = me_budget_line["LHF"] - rp_budget_line["LHF"]
+    diff_conv = me_budget_line["MoistureConvergence"] - rp_budget_line["MoistureConvergence"]
+    diff_storage = me_budget_line["StorageRelease"] - rp_budget_line["StorageRelease"]
+    diff_closed = me_budget_line["PrecipClosed"] - rp_budget_line["PrecipClosed"]
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
     fig.subplots_adjust(hspace=0.24, top=0.93)
     fig.suptitle(
         (
             f"Moisture-budget view of the precipitation spike "
-            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
-            f"{smooth_hours:.0f}h event / {background_hours:.0f}h trailing baseline)"
+            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
         ),
         fontsize=15,
         y=0.98,
@@ -845,35 +848,34 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_excess_line.time.values, me_excess_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$ excess")
-    ax.plot(me_excess_line.time.values, me_excess_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation excess")
-    ax.plot(me_excess_line.time.values, me_excess_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence excess")
-    ax.plot(me_excess_line.time.values, me_excess_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release excess")
-    ax.plot(me_excess_line.time.values, me_excess_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage excess")
-    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel("Excess over trailing baseline\n[W m$^{-2}$]")
-    ax.set_title("(b) Reanalysis-IC event pulse above the trailing baseline", loc="left", fontweight="bold")
+    ax.plot(me_budget_line.time.values, me_budget_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
+    ax.plot(me_budget_line.time.values, me_budget_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
+    ax.plot(me_budget_line.time.values, me_budget_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
+    ax.plot(me_budget_line.time.values, me_budget_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
+    ax.plot(me_budget_line.time.values, me_budget_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
+    ax.set_ylabel(r"W m$^{-2}$")
+    ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     ax = axes[2]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_excess_line.time.values, me_line_colL_excess, color="navy", linewidth=2.6, label="Reanalysis IC")
-    ax.plot(rp_excess_line.time.values, rp_line_colL_excess, color="darkorange", linewidth=2.4, label="IAU IC")
+    ax.plot(me_budget_line.time.values, me_line_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
+    ax.plot(rp_budget_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel("Reservoir excess\n[$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture reservoir excess above trailing baseline", loc="left", fontweight="bold")
+    ax.set_ylabel(r"$\langle L_v q \rangle'$ [$10^8$ J m$^{-2}$]")
+    ax.set_title("(c) Column moisture reservoir response", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_excess_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$ excess")
-    ax.plot(me_excess_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$ excess")
-    ax.plot(me_excess_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence excess")
-    ax.plot(me_excess_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release excess")
-    ax.plot(me_excess_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$ excess")
+    ax.plot(me_budget_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$")
+    ax.plot(me_budget_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$")
+    ax.plot(me_budget_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence")
+    ax.plot(me_budget_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release")
+    ax.plot(me_budget_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel("Reanalysis - IAU\nexcess [W m$^{-2}$]")
-    ax.set_title("(d) What makes the Reanalysis-IC event pulse larger?", loc="left", fontweight="bold")
+    ax.set_ylabel("Reanalysis - IAU\n[W m$^{-2}$]")
+    ax.set_title("(d) What makes the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     for ax in axes:
