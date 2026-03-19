@@ -478,6 +478,13 @@ def rolling_event_mean(da, steps):
     return xr.where(den > 0.0, num / den, np.nan)
 
 
+def trailing_baseline_mean(da, steps):
+    if steps <= 1:
+        return da.shift(time=1)
+    min_periods = max(1, steps // 2)
+    return da.shift(time=1).rolling(time=steps, center=False, min_periods=min_periods).mean()
+
+
 def refine_time_for_plot(ds, spacing_hours=1):
     if ds.sizes.get("time", 0) < 2:
         return ds
@@ -566,16 +573,18 @@ def build_event_budget_series(ds, smooth_hours=EVENT_SMOOTH_HOURS):
 
 def build_budget_excess_series(ds, event_smooth_hours=BUDGET_SMOOTH_HOURS, background_smooth_hours=BACKGROUND_SMOOTH_HOURS):
     fast = build_event_budget_series(ds, smooth_hours=event_smooth_hours)
-    slow = build_event_budget_series(ds, smooth_hours=background_smooth_hours)
+    background_steps = smooth_steps_from_hours(ds, background_smooth_hours)
 
     excess = xr.Dataset(coords={"time": fast["time"]}, attrs=dict(ds.attrs))
     for name in fast.data_vars:
-        excess[name] = fast[name] - slow[name]
+        background = trailing_baseline_mean(fast[name], background_steps)
+        excess[name] = fast[name] - background
 
     excess.attrs["event_smooth_hours"] = float(event_smooth_hours)
-    excess.attrs["background_smooth_hours"] = float(background_smooth_hours)
+    excess.attrs["background_lookback_hours"] = float(background_smooth_hours)
+    excess.attrs["background_mode"] = "trailing"
     excess.attrs["event_smooth_steps"] = int(fast.attrs.get("event_smooth_steps", smooth_steps_from_hours(ds, event_smooth_hours)))
-    excess.attrs["background_smooth_steps"] = int(slow.attrs.get("event_smooth_steps", smooth_steps_from_hours(ds, background_smooth_hours)))
+    excess.attrs["background_steps"] = int(background_steps)
     return excess
 
 
@@ -777,14 +786,14 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
-    background_hours = float(me_excess_plot.attrs["background_smooth_hours"])
+    background_hours = float(me_excess_plot.attrs["background_lookback_hours"])
     print_spike_summary(
         me_budget_plot,
         spike_indices,
         (
             f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} "
             f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
-            f"{smooth_hours:.0f}h budget / {background_hours:.0f}h background)"
+            f"{smooth_hours:.0f}h budget / {background_hours:.0f}h trailing baseline)"
         ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
@@ -804,7 +813,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         (
             f"Moisture-budget view of the precipitation spike "
             f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
-            f"{smooth_hours:.0f}h event / {background_hours:.0f}h background)"
+            f"{smooth_hours:.0f}h event / {background_hours:.0f}h trailing baseline)"
         ),
         fontsize=15,
         y=0.98,
@@ -842,8 +851,8 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     ax.plot(me_excess_line.time.values, me_excess_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release excess")
     ax.plot(me_excess_line.time.values, me_excess_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage excess")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel("Excess over background\n[W m$^{-2}$]")
-    ax.set_title("(b) Reanalysis-IC event pulse above the slow background", loc="left", fontweight="bold")
+    ax.set_ylabel("Excess over trailing baseline\n[W m$^{-2}$]")
+    ax.set_title("(b) Reanalysis-IC event pulse above the trailing baseline", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     ax = axes[2]
@@ -852,7 +861,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     ax.plot(rp_excess_line.time.values, rp_line_colL_excess, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reservoir excess\n[$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture reservoir excess above background", loc="left", fontweight="bold")
+    ax.set_title("(c) Column moisture reservoir excess above trailing baseline", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
