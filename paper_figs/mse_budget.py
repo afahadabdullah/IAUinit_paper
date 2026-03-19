@@ -848,14 +848,61 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_line.time.values, me_budget_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
-    ax.plot(me_budget_line.time.values, me_budget_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
-    ax.plot(me_budget_line.time.values, me_budget_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
-    ax.plot(me_budget_line.time.values, me_budget_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
-    ax.plot(me_budget_line.time.values, me_budget_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
+    line_mc = ax.plot(
+        me_budget_line.time.values,
+        me_budget_line["MoistureConvergence"],
+        color="tab:green",
+        linewidth=1.7,
+        alpha=0.72,
+        label="Moisture convergence",
+        zorder=1,
+    )[0]
+    line_storage = ax.plot(
+        me_budget_line.time.values,
+        me_budget_line["StorageRelease"],
+        color="tab:purple",
+        linewidth=1.8,
+        linestyle="--",
+        alpha=0.72,
+        label="Storage release",
+        zorder=1,
+    )[0]
+    line_lhf = ax.plot(
+        me_budget_line.time.values,
+        me_budget_line["LHF"],
+        color="tab:blue",
+        linewidth=1.9,
+        alpha=0.90,
+        label="Surface evaporation",
+        zorder=2,
+    )[0]
+    line_closed = ax.plot(
+        me_budget_line.time.values,
+        me_budget_line["PrecipClosed"],
+        color="firebrick",
+        linewidth=2.9,
+        linestyle=":",
+        label="Net source E + MC + storage",
+        zorder=4,
+    )[0]
+    line_precip = ax.plot(
+        me_budget_line.time.values,
+        me_budget_line["Precip"],
+        color="black",
+        linewidth=2.8,
+        label=r"$L_v P$",
+        zorder=5,
+    )[0]
     ax.set_ylabel(r"W m$^{-2}$")
     ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
-    ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
+    ax.legend(
+        [line_precip, line_closed, line_lhf, line_mc, line_storage],
+        [line_precip.get_label(), line_closed.get_label(), line_lhf.get_label(), line_mc.get_label(), line_storage.get_label()],
+        loc="upper right",
+        ncol=2,
+        frameon=False,
+        fontsize=10,
+    )
 
     ax = axes[2]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
@@ -868,15 +915,68 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[3]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$")
-    ax.plot(me_budget_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$")
-    ax.plot(me_budget_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence")
-    ax.plot(me_budget_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release")
-    ax.plot(me_budget_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$")
+    diff_line_mc = ax.plot(
+        me_budget_line.time.values,
+        diff_conv,
+        color="tab:green",
+        linewidth=1.7,
+        alpha=0.72,
+        label=r"$\Delta$ moisture convergence",
+        zorder=1,
+    )[0]
+    diff_line_storage = ax.plot(
+        me_budget_line.time.values,
+        diff_storage,
+        color="tab:purple",
+        linewidth=1.8,
+        linestyle="--",
+        alpha=0.72,
+        label=r"$\Delta$ storage release",
+        zorder=1,
+    )[0]
+    diff_line_lhf = ax.plot(
+        me_budget_line.time.values,
+        diff_lhf,
+        color="tab:blue",
+        linewidth=1.9,
+        alpha=0.90,
+        label=r"$\Delta E$",
+        zorder=2,
+    )[0]
+    diff_line_closed = ax.plot(
+        me_budget_line.time.values,
+        diff_closed,
+        color="firebrick",
+        linewidth=2.9,
+        linestyle=":",
+        label=r"Net $\Delta(E + MC + storage)$",
+        zorder=4,
+    )[0]
+    diff_line_precip = ax.plot(
+        me_budget_line.time.values,
+        diff_precip,
+        color="black",
+        linewidth=2.8,
+        label=r"$\Delta L_v P$",
+        zorder=5,
+    )[0]
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[W m$^{-2}$]")
     ax.set_title("(d) What makes the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
-    ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
+    ax.legend(
+        [diff_line_precip, diff_line_closed, diff_line_lhf, diff_line_mc, diff_line_storage],
+        [
+            diff_line_precip.get_label(),
+            diff_line_closed.get_label(),
+            diff_line_lhf.get_label(),
+            diff_line_mc.get_label(),
+            diff_line_storage.get_label(),
+        ],
+        loc="upper right",
+        ncol=2,
+        frameon=False,
+        fontsize=10,
+    )
 
     for ax in axes:
         ax.grid(True, linestyle=":", alpha=0.6)
