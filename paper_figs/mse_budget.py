@@ -34,6 +34,7 @@ MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
 EVENT_SMOOTH_HOURS = 24
 BUDGET_SMOOTH_HOURS = 48
+BACKGROUND_SMOOTH_HOURS = 120
 FALLBACK_RESAMPLE_FREQ = "6h"
 
 PROG_REQUIRED_VARS = ("T", "QV", "H")
@@ -563,6 +564,21 @@ def build_event_budget_series(ds, smooth_hours=EVENT_SMOOTH_HOURS):
     return out
 
 
+def build_budget_excess_series(ds, event_smooth_hours=BUDGET_SMOOTH_HOURS, background_smooth_hours=BACKGROUND_SMOOTH_HOURS):
+    fast = build_event_budget_series(ds, smooth_hours=event_smooth_hours)
+    slow = build_event_budget_series(ds, smooth_hours=background_smooth_hours)
+
+    excess = xr.Dataset(coords={"time": fast["time"]}, attrs=dict(ds.attrs))
+    for name in fast.data_vars:
+        excess[name] = fast[name] - slow[name]
+
+    excess.attrs["event_smooth_hours"] = float(event_smooth_hours)
+    excess.attrs["background_smooth_hours"] = float(background_smooth_hours)
+    excess.attrs["event_smooth_steps"] = int(fast.attrs.get("event_smooth_steps", smooth_steps_from_hours(ds, event_smooth_hours)))
+    excess.attrs["background_smooth_steps"] = int(slow.attrs.get("event_smooth_steps", smooth_steps_from_hours(ds, background_smooth_hours)))
+    return excess
+
+
 # ==============================================================================
 # MSE Budget Engine
 # ==============================================================================
@@ -745,11 +761,15 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     rp_precip_plot = build_event_budget_series(rp_series, smooth_hours=EVENT_SMOOTH_HOURS)
     me_budget_plot = build_event_budget_series(me_series, smooth_hours=BUDGET_SMOOTH_HOURS)
     rp_budget_plot = build_event_budget_series(rp_series, smooth_hours=BUDGET_SMOOTH_HOURS)
+    me_excess_plot = build_budget_excess_series(me_series)
+    rp_excess_plot = build_budget_excess_series(rp_series)
 
     me_precip_line = refine_time_for_plot(me_precip_plot)
     rp_precip_line = refine_time_for_plot(rp_precip_plot)
     me_budget_line = refine_time_for_plot(me_budget_plot)
     rp_budget_line = refine_time_for_plot(rp_budget_plot)
+    me_excess_line = refine_time_for_plot(me_excess_plot)
+    rp_excess_line = refine_time_for_plot(rp_excess_plot)
 
     spike_indices, threshold = detect_precip_spikes(me_precip_plot["Precip"])
     half_window_steps = half_window_steps_from_hours(me_series)
@@ -757,31 +777,34 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     output_fig = Path(__file__).with_name(f"mse_budget_spike_story_{series_kind}.png")
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
+    background_hours = float(me_excess_plot.attrs["background_smooth_hours"])
     print_spike_summary(
         me_budget_plot,
         spike_indices,
         (
             f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} "
-            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+            f"({series_kind}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
+            f"{smooth_hours:.0f}h budget / {background_hours:.0f}h background)"
         ),
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
 
     time_values = me_precip_plot.time.values
-    me_line_colL_anom = (me_budget_line["col_L"] - me_budget_line["col_L"].mean("time")) * 1.0e-8
-    rp_line_colL_anom = (rp_budget_line["col_L"] - rp_budget_line["col_L"].mean("time")) * 1.0e-8
-    diff_precip = me_budget_line["Precip"] - rp_budget_line["Precip"]
-    diff_lhf = me_budget_line["LHF"] - rp_budget_line["LHF"]
-    diff_conv = me_budget_line["MoistureConvergence"] - rp_budget_line["MoistureConvergence"]
-    diff_storage = me_budget_line["StorageRelease"] - rp_budget_line["StorageRelease"]
-    diff_closed = me_budget_line["PrecipClosed"] - rp_budget_line["PrecipClosed"]
+    me_line_colL_excess = me_excess_line["col_L"] * 1.0e-8
+    rp_line_colL_excess = rp_excess_line["col_L"] * 1.0e-8
+    diff_precip = me_excess_line["Precip"] - rp_excess_line["Precip"]
+    diff_lhf = me_excess_line["LHF"] - rp_excess_line["LHF"]
+    diff_conv = me_excess_line["MoistureConvergence"] - rp_excess_line["MoistureConvergence"]
+    diff_storage = me_excess_line["StorageRelease"] - rp_excess_line["StorageRelease"]
+    diff_closed = me_excess_line["PrecipClosed"] - rp_excess_line["PrecipClosed"]
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=True)
     fig.subplots_adjust(hspace=0.24, top=0.93)
     fig.suptitle(
         (
             f"Moisture-budget view of the precipitation spike "
-            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / {smooth_hours:.0f}h budget smooth)"
+            f"({plot_label}, {EVENT_SMOOTH_HOURS:.0f}h precip / "
+            f"{smooth_hours:.0f}h event / {background_hours:.0f}h background)"
         ),
         fontsize=15,
         y=0.98,
@@ -813,34 +836,35 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[1]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_line.time.values, me_budget_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$")
-    ax.plot(me_budget_line.time.values, me_budget_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation")
-    ax.plot(me_budget_line.time.values, me_budget_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence")
-    ax.plot(me_budget_line.time.values, me_budget_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release")
-    ax.plot(me_budget_line.time.values, me_budget_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage")
-    ax.set_ylabel(r"W m$^{-2}$")
-    ax.set_title("(b) Reanalysis-IC moisture source decomposition", loc="left", fontweight="bold")
+    ax.plot(me_excess_line.time.values, me_excess_line["Precip"], color="black", linewidth=2.8, label=r"$L_v P$ excess")
+    ax.plot(me_excess_line.time.values, me_excess_line["LHF"], color="tab:blue", linewidth=2.2, label="Surface evaporation excess")
+    ax.plot(me_excess_line.time.values, me_excess_line["MoistureConvergence"], color="tab:green", linewidth=2.2, label="Moisture convergence excess")
+    ax.plot(me_excess_line.time.values, me_excess_line["StorageRelease"], color="tab:purple", linewidth=2.2, linestyle="--", label="Storage release excess")
+    ax.plot(me_excess_line.time.values, me_excess_line["PrecipClosed"], color="0.45", linewidth=1.6, linestyle=":", label="E + MC + storage excess")
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_ylabel("Excess over background\n[W m$^{-2}$]")
+    ax.set_title("(b) Reanalysis-IC event pulse above the slow background", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     ax = axes[2]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_line.time.values, me_line_colL_anom, color="navy", linewidth=2.6, label="Reanalysis IC")
-    ax.plot(rp_budget_line.time.values, rp_line_colL_anom, color="darkorange", linewidth=2.4, label="IAU IC")
+    ax.plot(me_excess_line.time.values, me_line_colL_excess, color="navy", linewidth=2.6, label="Reanalysis IC")
+    ax.plot(rp_excess_line.time.values, rp_line_colL_excess, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel(r"$\langle L_v q \rangle'$ [$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture reservoir response", loc="left", fontweight="bold")
+    ax.set_ylabel("Reservoir excess\n[$10^8$ J m$^{-2}$]")
+    ax.set_title("(c) Column moisture reservoir excess above background", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$")
-    ax.plot(me_budget_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$")
-    ax.plot(me_budget_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence")
-    ax.plot(me_budget_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release")
-    ax.plot(me_budget_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$")
+    ax.plot(me_excess_line.time.values, diff_precip, color="black", linewidth=2.8, label=r"$\Delta L_v P$ excess")
+    ax.plot(me_excess_line.time.values, diff_lhf, color="tab:blue", linewidth=2.2, label=r"$\Delta E$ excess")
+    ax.plot(me_excess_line.time.values, diff_conv, color="tab:green", linewidth=2.2, label=r"$\Delta$ moisture convergence excess")
+    ax.plot(me_excess_line.time.values, diff_storage, color="tab:purple", linewidth=2.2, linestyle="--", label=r"$\Delta$ storage release excess")
+    ax.plot(me_excess_line.time.values, diff_closed, color="0.45", linewidth=1.6, linestyle=":", label=r"$\Delta(E + MC + storage)$ excess")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel("Reanalysis - IAU\n[W m$^{-2}$]")
-    ax.set_title("(d) What makes the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
+    ax.set_ylabel("Reanalysis - IAU\nexcess [W m$^{-2}$]")
+    ax.set_title("(d) What makes the Reanalysis-IC event pulse larger?", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
 
     for ax in axes:
