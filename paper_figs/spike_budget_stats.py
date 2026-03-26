@@ -23,6 +23,7 @@ MAX_SPIKES_PER_REGION = 999
 BOOTSTRAP_SAMPLES = 20000
 PERMUTATION_SAMPLES = 20000
 RNG_SEED = 42
+ENSEMBLE_EQUIVALENT_FACTOR = 10
 
 CACHE_DIR = Path(__file__).with_name("cache_multi_spike_v1")
 EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_budget_events.csv")
@@ -286,19 +287,13 @@ def paired_signflip_pvalue(values, n_resamples=PERMUTATION_SAMPLES, seed=RNG_SEE
     return float((np.count_nonzero(sample_means >= observed - 1.0e-12) + 1) / (n_resamples + 1))
 
 
-def bootstrap_mean_ci(values, n_resamples=BOOTSTRAP_SAMPLES, seed=RNG_SEED):
+def sample_std(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     n = values.size
-    if n == 0:
-        return np.nan, np.nan
-    if n == 1:
-        return float(values[0]), float(values[0])
-
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(0, n, size=(n_resamples, n))
-    means = values[idx].mean(axis=1)
-    return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+    if n <= 1:
+        return 0.0
+    return float(np.nanstd(values, ddof=1))
 
 
 def collect_region_events(region, me_series, rp_series):
@@ -366,15 +361,25 @@ def write_csv(path, rows, fieldnames):
             writer.writerow(row)
 
 
+def load_event_rows(path):
+    rows = []
+    with path.open("r", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            parsed = dict(row)
+            for key, value in row.items():
+                if key.endswith("_wm2") or key.endswith("_jm2"):
+                    parsed[key] = float(value)
+            rows.append(parsed)
+    return rows
+
+
 def summarize_components(rows, region_name=None):
     summary = []
     for key, label in COMPONENTS:
         me_vals = np.array([row[f"rean_{key}"] for row in rows], dtype=float) * 1.0e-6
         rp_vals = np.array([row[f"iau_{key}"] for row in rows], dtype=float) * 1.0e-6
         diff_vals = np.array([row[f"diff_{key}"] for row in rows], dtype=float) * 1.0e-6
-        me_low, me_high = bootstrap_mean_ci(me_vals)
-        rp_low, rp_high = bootstrap_mean_ci(rp_vals)
-        diff_low, diff_high = bootstrap_mean_ci(diff_vals)
         summary.append(
             {
                 "region_name": region_name or "ALL",
@@ -382,14 +387,11 @@ def summarize_components(rows, region_name=None):
                 "component_label": label,
                 "n_events": int(len(diff_vals)),
                 "rean_mean_mj": float(np.nanmean(me_vals)),
-                "rean_ci_low_mj": me_low,
-                "rean_ci_high_mj": me_high,
+                "rean_std_mj": sample_std(me_vals),
                 "iau_mean_mj": float(np.nanmean(rp_vals)),
-                "iau_ci_low_mj": rp_low,
-                "iau_ci_high_mj": rp_high,
+                "iau_std_mj": sample_std(rp_vals),
                 "diff_mean_mj": float(np.nanmean(diff_vals)),
-                "diff_ci_low_mj": diff_low,
-                "diff_ci_high_mj": diff_high,
+                "diff_std_mj": sample_std(diff_vals),
                 "pvalue": paired_signflip_pvalue(diff_vals),
             }
         )
@@ -398,7 +400,7 @@ def summarize_components(rows, region_name=None):
 
 def plot_summary(all_rows, overall_summary):
     labels = [label for _, label in COMPONENTS]
-    region_counts = [sum(row["region_key"] == region["key"] for row in all_rows) for region in REGIONS]
+    ensemble_equivalent_total = ENSEMBLE_EQUIVALENT_FACTOR * len(all_rows)
 
     mean_rean = np.array([row["rean_mean_mj"] for row in overall_summary], dtype=float)
     mean_iau = np.array([row["iau_mean_mj"] for row in overall_summary], dtype=float)
@@ -406,20 +408,20 @@ def plot_summary(all_rows, overall_summary):
 
     rean_yerr = np.vstack(
         [
-            mean_rean - np.array([row["rean_ci_low_mj"] for row in overall_summary], dtype=float),
-            np.array([row["rean_ci_high_mj"] for row in overall_summary], dtype=float) - mean_rean,
+            np.array([row["rean_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["rean_std_mj"] for row in overall_summary], dtype=float),
         ]
     )
     iau_yerr = np.vstack(
         [
-            mean_iau - np.array([row["iau_ci_low_mj"] for row in overall_summary], dtype=float),
-            np.array([row["iau_ci_high_mj"] for row in overall_summary], dtype=float) - mean_iau,
+            np.array([row["iau_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["iau_std_mj"] for row in overall_summary], dtype=float),
         ]
     )
     diff_yerr = np.vstack(
         [
-            mean_diff - np.array([row["diff_ci_low_mj"] for row in overall_summary], dtype=float),
-            np.array([row["diff_ci_high_mj"] for row in overall_summary], dtype=float) - mean_diff,
+            np.array([row["diff_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["diff_std_mj"] for row in overall_summary], dtype=float),
         ]
     )
 
@@ -427,20 +429,34 @@ def plot_summary(all_rows, overall_summary):
     width = 0.36
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
-    fig, axes = plt.subplots(3, 1, figsize=(12, 13))
-    fig.subplots_adjust(hspace=0.3, top=0.92)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 9.2))
+    fig.subplots_adjust(hspace=0.32, top=0.88)
     fig.suptitle(
         "Multi-event spike-window moisture budget statistics\n"
         "All detected spikes across the six spike_pr regions",
         fontsize=16,
     )
+    fig.text(
+        0.5,
+        0.905,
+        (
+            f"Detected regional spike windows = {len(all_rows)}; "
+            f"10-member equivalent total = {ensemble_equivalent_total}"
+        ),
+        ha="center",
+        va="center",
+        fontsize=11,
+    )
 
     ax = axes[0]
-    ax.bar(np.arange(len(REGIONS)), region_counts, color="0.35", width=0.7)
-    ax.set_xticks(np.arange(len(REGIONS)))
-    ax.set_xticklabels([region["title"] for region in REGIONS], rotation=20, ha="right")
-    ax.set_ylabel("Event count")
-    ax.set_title("(a) Detected spike events by region", loc="left", fontweight="bold")
+    ax.bar(x - width / 2, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Reanalysis IC")
+    ax.bar(x + width / 2, mean_iau, width=width, color="darkorange", alpha=0.9, yerr=iau_yerr, capsize=4, label="IAU IC")
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("MJ m$^{-2}$")
+    ax.set_title("(a) Mean event-integrated moisture budget across all spike windows", loc="left", fontweight="bold")
+    ax.legend(loc="upper left", frameon=False)
     ax.text(
         0.01,
         0.96,
@@ -457,16 +473,6 @@ def plot_summary(all_rows, overall_summary):
     )
 
     ax = axes[1]
-    ax.bar(x - width / 2, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Reanalysis IC")
-    ax.bar(x + width / 2, mean_iau, width=width, color="darkorange", alpha=0.9, yerr=iau_yerr, capsize=4, label="IAU IC")
-    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("MJ m$^{-2}$")
-    ax.set_title("(b) Mean event-integrated moisture budget across all spike windows", loc="left", fontweight="bold")
-    ax.legend(loc="upper left", frameon=False)
-
-    ax = axes[2]
     bars = ax.bar(x, mean_diff, color=colors, alpha=0.88, yerr=diff_yerr, capsize=4)
     bars[-1].set_hatch("//")
     bars[-1].set_edgecolor("firebrick")
@@ -475,7 +481,7 @@ def plot_summary(all_rows, overall_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(c) Mean paired difference with sign-flip p-values", loc="left", fontweight="bold")
+    ax.set_title("(b) Mean paired difference with sign-flip p-values", loc="left", fontweight="bold")
     for xpos, row, value in zip(x, overall_summary, mean_diff):
         if value >= 0.0:
             yloc = value + diff_yerr[1, xpos] + 3.0
@@ -491,16 +497,6 @@ def plot_summary(all_rows, overall_summary):
             va=va,
             fontsize=9,
         )
-    ax.text(
-        0.01,
-        0.96,
-        f"Total events = {len(all_rows)}; error bars show bootstrap 95% CI of the event mean",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
-    )
 
     for ax in axes:
         ax.grid(True, linestyle=":", alpha=0.6)
@@ -516,53 +512,57 @@ def print_component_summary(summary):
     for row in summary:
         print(
             f"  {row['component_label']}: "
-            f"Reanalysis={row['rean_mean_mj']:6.2f} "
-            f"[{row['rean_ci_low_mj']:6.2f}, {row['rean_ci_high_mj']:6.2f}], "
-            f"IAU={row['iau_mean_mj']:6.2f} "
-            f"[{row['iau_ci_low_mj']:6.2f}, {row['iau_ci_high_mj']:6.2f}], "
-            f"diff={row['diff_mean_mj']:6.2f} "
-            f"[{row['diff_ci_low_mj']:6.2f}, {row['diff_ci_high_mj']:6.2f}], "
+            f"Reanalysis={row['rean_mean_mj']:6.2f} +/- {row['rean_std_mj']:6.2f}, "
+            f"IAU={row['iau_mean_mj']:6.2f} +/- {row['iau_std_mj']:6.2f}, "
+            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_std_mj']:6.2f}, "
             f"p={row['pvalue']:.4f}"
         )
 
 
 def main():
-    me_prog_patterns = monthly_patterns(mb.me_prog)
-    me_surf_patterns = monthly_patterns(mb.me_surf)
-    rp_prog_patterns = monthly_patterns(mb.rp_prog)
-    rp_surf_patterns = monthly_patterns(mb.rp_surf)
+    if EVENT_TABLE_PATH.exists():
+        print(f"Loading saved spike-event statistics from {EVENT_TABLE_PATH}...")
+        all_rows = load_event_rows(EVENT_TABLE_PATH)
+    else:
+        me_prog_patterns = monthly_patterns(mb.me_prog)
+        me_surf_patterns = monthly_patterns(mb.me_surf)
+        rp_prog_patterns = monthly_patterns(mb.rp_prog)
+        rp_surf_patterns = monthly_patterns(mb.rp_surf)
 
-    all_rows = []
+        all_rows = []
+        for region in REGIONS:
+            me_series = compute_region_budget_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
+            rp_series = compute_region_budget_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
+            me_series, rp_series = xr.align(me_series, rp_series, join="inner")
+            region_rows = collect_region_events(region, me_series, rp_series)
+            all_rows.extend(region_rows)
+
+        event_fields = [
+            "region_key",
+            "region_name",
+            "event_id",
+            "peak_time",
+            "event_start",
+            "event_end",
+            "threshold_wm2",
+            "reference_peak_wm2",
+            "rean_peak_wm2",
+            "iau_peak_wm2",
+        ]
+        for prefix in ("rean", "iau", "diff"):
+            for key, _ in COMPONENTS:
+                event_fields.append(f"{prefix}_{key}")
+        event_fields.extend(["rean_residual_jm2", "iau_residual_jm2", "diff_residual_jm2"])
+        write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
+        print(f"Event table saved to {EVENT_TABLE_PATH}")
+
     region_summary_rows = []
-
     for region in REGIONS:
-        me_series = compute_region_budget_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
-        rp_series = compute_region_budget_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
-        me_series, rp_series = xr.align(me_series, rp_series, join="inner")
-        region_rows = collect_region_events(region, me_series, rp_series)
-        all_rows.extend(region_rows)
+        region_rows = [row for row in all_rows if row["region_key"] == region["key"]]
         region_summary_rows.extend(summarize_components(region_rows, region_name=region["title"]))
 
     overall_summary = summarize_components(all_rows)
     print_component_summary(overall_summary)
-
-    event_fields = [
-        "region_key",
-        "region_name",
-        "event_id",
-        "peak_time",
-        "event_start",
-        "event_end",
-        "threshold_wm2",
-        "reference_peak_wm2",
-        "rean_peak_wm2",
-        "iau_peak_wm2",
-    ]
-    for prefix in ("rean", "iau", "diff"):
-        for key, _ in COMPONENTS:
-            event_fields.append(f"{prefix}_{key}")
-    event_fields.extend(["rean_residual_jm2", "iau_residual_jm2", "diff_residual_jm2"])
-    write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
 
     summary_fields = [
         "region_name",
@@ -570,19 +570,15 @@ def main():
         "component_label",
         "n_events",
         "rean_mean_mj",
-        "rean_ci_low_mj",
-        "rean_ci_high_mj",
+        "rean_std_mj",
         "iau_mean_mj",
-        "iau_ci_low_mj",
-        "iau_ci_high_mj",
+        "iau_std_mj",
         "diff_mean_mj",
-        "diff_ci_low_mj",
-        "diff_ci_high_mj",
+        "diff_std_mj",
         "pvalue",
     ]
     write_csv(SUMMARY_PATH, overall_summary, summary_fields)
     write_csv(REGION_SUMMARY_PATH, region_summary_rows, summary_fields)
-    print(f"Event table saved to {EVENT_TABLE_PATH}")
     print(f"Overall summary saved to {SUMMARY_PATH}")
     print(f"Region summary saved to {REGION_SUMMARY_PATH}")
 
