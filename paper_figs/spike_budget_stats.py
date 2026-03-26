@@ -287,13 +287,13 @@ def paired_signflip_pvalue(values, n_resamples=PERMUTATION_SAMPLES, seed=RNG_SEE
     return float((np.count_nonzero(sample_means >= observed - 1.0e-12) + 1) / (n_resamples + 1))
 
 
-def sample_std(values):
+def sample_sem(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     n = values.size
     if n <= 1:
         return 0.0
-    return float(np.nanstd(values, ddof=1))
+    return float(np.nanstd(values, ddof=1) / np.sqrt(n))
 
 
 def collect_region_events(region, me_series, rp_series):
@@ -387,11 +387,11 @@ def summarize_components(rows, region_name=None):
                 "component_label": label,
                 "n_events": int(len(diff_vals)),
                 "rean_mean_mj": float(np.nanmean(me_vals)),
-                "rean_std_mj": sample_std(me_vals),
+                "rean_sem_mj": sample_sem(me_vals),
                 "iau_mean_mj": float(np.nanmean(rp_vals)),
-                "iau_std_mj": sample_std(rp_vals),
+                "iau_sem_mj": sample_sem(rp_vals),
                 "diff_mean_mj": float(np.nanmean(diff_vals)),
-                "diff_std_mj": sample_std(diff_vals),
+                "diff_sem_mj": sample_sem(diff_vals),
                 "pvalue": paired_signflip_pvalue(diff_vals),
             }
         )
@@ -408,20 +408,20 @@ def plot_summary(all_rows, overall_summary):
 
     rean_yerr = np.vstack(
         [
-            np.array([row["rean_std_mj"] for row in overall_summary], dtype=float),
-            np.array([row["rean_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["rean_sem_mj"] for row in overall_summary], dtype=float),
+            np.array([row["rean_sem_mj"] for row in overall_summary], dtype=float),
         ]
     )
     iau_yerr = np.vstack(
         [
-            np.array([row["iau_std_mj"] for row in overall_summary], dtype=float),
-            np.array([row["iau_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["iau_sem_mj"] for row in overall_summary], dtype=float),
+            np.array([row["iau_sem_mj"] for row in overall_summary], dtype=float),
         ]
     )
     diff_yerr = np.vstack(
         [
-            np.array([row["diff_std_mj"] for row in overall_summary], dtype=float),
-            np.array([row["diff_std_mj"] for row in overall_summary], dtype=float),
+            np.array([row["diff_sem_mj"] for row in overall_summary], dtype=float),
+            np.array([row["diff_sem_mj"] for row in overall_summary], dtype=float),
         ]
     )
 
@@ -512,9 +512,9 @@ def print_component_summary(summary):
     for row in summary:
         print(
             f"  {row['component_label']}: "
-            f"Reanalysis={row['rean_mean_mj']:6.2f} +/- {row['rean_std_mj']:6.2f}, "
-            f"IAU={row['iau_mean_mj']:6.2f} +/- {row['iau_std_mj']:6.2f}, "
-            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_std_mj']:6.2f}, "
+            f"Reanalysis={row['rean_mean_mj']:6.2f} +/- {row['rean_sem_mj']:6.2f}, "
+            f"IAU={row['iau_mean_mj']:6.2f} +/- {row['iau_sem_mj']:6.2f}, "
+            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_sem_mj']:6.2f}, "
             f"p={row['pvalue']:.4f}"
         )
 
@@ -570,11 +570,11 @@ def main():
         "component_label",
         "n_events",
         "rean_mean_mj",
-        "rean_std_mj",
+        "rean_sem_mj",
         "iau_mean_mj",
-        "iau_std_mj",
+        "iau_sem_mj",
         "diff_mean_mj",
-        "diff_std_mj",
+        "diff_sem_mj",
         "pvalue",
     ]
     write_csv(SUMMARY_PATH, overall_summary, summary_fields)
