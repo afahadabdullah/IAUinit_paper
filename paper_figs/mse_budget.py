@@ -34,8 +34,8 @@ SPIKE_QUANTILE = 0.90
 MAX_SPIKES = 1
 MIN_PEAK_SEPARATION = 2
 SPIKE_WINDOW_HOURS = 24
-LOWER_PANEL_HOURS_BEFORE = 12
-LOWER_PANEL_HOURS_AFTER = 24
+LOWER_PANEL_HOURS_BEFORE = 24
+LOWER_PANEL_HOURS_AFTER = 12
 EVENT_SMOOTH_HOURS = 6
 BUDGET_SMOOTH_HOURS = 24
 FALLBACK_RESAMPLE_FREQ = "6h"
@@ -843,6 +843,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     right_candidate = focus_center + np.timedelta64(LOWER_PANEL_HOURS_AFTER, "h")
     focus_start = full_start if full_start > left_candidate else left_candidate
     focus_end = full_end if full_end < right_candidate else right_candidate
+    lower_panel_end = focus_center
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
     precip_smooth_text = smoothing_label(EVENT_SMOOTH_HOURS)
@@ -857,13 +858,13 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
     print(
-        "  Budget panels focus on dominant spike window: "
-        f"{np.datetime_as_string(focus_start, unit='h')} to {np.datetime_as_string(focus_end, unit='h')}"
+        "  Budget panels focus on the buildup to the dominant spike: "
+        f"{np.datetime_as_string(focus_start, unit='h')} to {np.datetime_as_string(lower_panel_end, unit='h')}"
     )
 
     time_values = me_precip_plot.time.values
-    me_budget_focus = me_budget_line.sel(time=slice(focus_start, focus_end))
-    rp_budget_focus = rp_budget_line.sel(time=slice(focus_start, focus_end))
+    me_budget_focus = me_budget_line.sel(time=slice(focus_start, lower_panel_end))
+    rp_budget_focus = rp_budget_line.sel(time=slice(focus_start, lower_panel_end))
 
     me_cum_precip = cumulative_flux_series(me_budget_focus["Precip"]) * 1.0e-6
     me_cum_lhf = cumulative_flux_series(me_budget_focus["LHF"]) * 1.0e-6
@@ -969,7 +970,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         zorder=5,
     )[0]
     ax.set_ylabel(r"MJ m$^{-2}$")
-    ax.set_title("(b) Cumulative moisture budget at S1", loc="left", fontweight="bold")
+    ax.set_title("(b) Cumulative moisture sources leading into S1", loc="left", fontweight="bold")
     ax.legend(
         [line_precip, line_closed, line_lhf, line_mc, line_storage],
         [line_precip.get_label(), line_closed.get_label(), line_lhf.get_label(), line_mc.get_label(), line_storage.get_label()],
@@ -985,7 +986,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     ax.plot(rp_budget_focus.time.values, rp_line_colL_change, color="darkorange", linewidth=2.4, label="IAU IC")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"$\Delta\langle L_v q \rangle$ [$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture change at S1", loc="left", fontweight="bold")
+    ax.set_title("(c) Column moisture buildup leading into S1", loc="left", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=10)
 
     ax = axes[3]
@@ -1037,7 +1038,7 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     )[0]
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(d) Why is the Reanalysis-IC spike larger?", loc="left", fontweight="bold")
+    ax.set_title("(d) Why is the Reanalysis-IC S1 spike larger?", loc="left", fontweight="bold")
     ax.legend(
         [diff_line_precip, diff_line_closed, diff_line_lhf, diff_line_mc, diff_line_storage],
         [
@@ -1062,12 +1063,10 @@ def plot_spike_budget(me_series, rp_series, series_kind):
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
 
     for ax in axes[1:]:
-        ax.set_xlim(focus_start, focus_end)
+        ax.set_xlim(focus_start, lower_panel_end)
 
-    plot_start = np.datetime64(PLOT_START)
-    plot_end = np.datetime64(PLOT_END) + np.timedelta64(23, "h")
-    axes[0].set_xlim(plot_start, plot_end)
-    axes[0].set_xlabel("Time (May 2005)")
+    axes[0].set_xlim(focus_start, focus_end)
+    axes[0].set_xlabel("Time Around S1")
     axes[1].tick_params(labelbottom=False)
     axes[2].tick_params(labelbottom=False)
     axes[-1].set_xlabel("Time Around S1")
