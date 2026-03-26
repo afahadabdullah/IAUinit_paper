@@ -574,9 +574,8 @@ def cumulative_flux_series(da):
     return xr.DataArray(out, coords=da.coords, dims=da.dims)
 
 
-def build_event_budget_table(series, spike_indices, window_hours=SPIKE_WINDOW_HOURS, smooth_hours=EVENT_SMOOTH_HOURS):
+def build_event_budget_table(series, spike_indices, window_hours=SPIKE_WINDOW_HOURS):
     half_steps = half_window_steps_from_hours(series, window_hours)
-    smooth_col_L = rolling_event_mean(series["col_L"], smooth_steps_from_hours(series, smooth_hours))
 
     rows = []
     for spike_id, idx in enumerate(spike_indices, start=1):
@@ -586,10 +585,9 @@ def build_event_budget_table(series, spike_indices, window_hours=SPIKE_WINDOW_HO
 
         precip_int = integrate_flux_window(window["Precip"])
         evap_int = integrate_flux_window(window["LHF"])
-        storage_int = -(
-            float(smooth_col_L.isel(time=i1)) - float(smooth_col_L.isel(time=i0))
-        )
-        conv_int = precip_int - evap_int - storage_int
+        conv_int = integrate_flux_window(window["MoistureConvergence"])
+        storage_int = -(float(series["col_L"].isel(time=i1)) - float(series["col_L"].isel(time=i0)))
+        closed_int = evap_int + conv_int + storage_int
         rows.append(
             {
                 "spike": f"S{spike_id}",
@@ -598,6 +596,8 @@ def build_event_budget_table(series, spike_indices, window_hours=SPIKE_WINDOW_HO
                 "evap_jm2": evap_int,
                 "storage_jm2": storage_int,
                 "conv_jm2": conv_int,
+                "closed_jm2": closed_int,
+                "residual_jm2": precip_int - closed_int,
             }
         )
 
@@ -613,7 +613,9 @@ def print_event_table(rows, name):
             f"P={row['precip_jm2'] / 1.0e6:6.2f}, "
             f"E={row['evap_jm2'] / 1.0e6:6.2f}, "
             f"MC={row['conv_jm2'] / 1.0e6:6.2f}, "
-            f"-dL={row['storage_jm2'] / 1.0e6:6.2f} MJ m-2"
+            f"-dL={row['storage_jm2'] / 1.0e6:6.2f}, "
+            f"closed={row['closed_jm2'] / 1.0e6:6.2f}, "
+            f"residual={row['residual_jm2'] / 1.0e6:6.2f} MJ m-2"
         )
 
 
@@ -823,8 +825,6 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     me_precip_line = refine_time_for_plot(me_precip_plot)
     rp_precip_line = refine_time_for_plot(rp_precip_plot)
-    me_budget_line = refine_time_for_plot(me_budget_plot)
-    rp_budget_line = refine_time_for_plot(rp_budget_plot)
 
     spike_indices, threshold = detect_precip_spikes(me_precip_plot["Precip"])
     half_window_steps = half_window_steps_from_hours(me_series)
@@ -836,14 +836,30 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     else:
         dominant_idx = int(np.nanargmax(np.asarray(me_precip_plot["Precip"].values, dtype=float)))
 
-    full_start = me_precip_plot.time.values[0].astype("datetime64[h]")
-    full_end = me_precip_plot.time.values[-1].astype("datetime64[h]")
-    focus_center = me_precip_plot.time.values[dominant_idx].astype("datetime64[h]")
-    left_candidate = focus_center - np.timedelta64(LOWER_PANEL_HOURS_BEFORE, "h")
-    right_candidate = focus_center + np.timedelta64(LOWER_PANEL_HOURS_AFTER, "h")
-    focus_start = full_start if full_start > left_candidate else left_candidate
-    focus_end = full_end if full_end < right_candidate else right_candidate
-    lower_panel_end = focus_center
+    spike_indices = np.array([dominant_idx], dtype=int)
+    time_values = me_precip_plot.time.values
+    event_start_idx = max(dominant_idx - half_window_steps, 0)
+    event_end_idx = min(dominant_idx + half_window_steps, len(time_values) - 1)
+    event_start = time_values[event_start_idx].astype("datetime64[h]")
+    event_end = time_values[event_end_idx].astype("datetime64[h]")
+
+    dt_hours = infer_time_step_hours(me_precip_plot)
+    context_steps = max(1, int(round(12.0 / max(dt_hours, 1.0e-6))))
+    plot_start = time_values[max(event_start_idx - context_steps, 0)].astype("datetime64[h]")
+    plot_end = time_values[min(event_end_idx + context_steps, len(time_values) - 1)].astype("datetime64[h]")
+
+    me_events, _ = build_event_budget_table(me_budget_plot, spike_indices, window_hours=SPIKE_WINDOW_HOURS)
+    rp_events, _ = build_event_budget_table(rp_budget_plot, spike_indices, window_hours=SPIKE_WINDOW_HOURS)
+    me_event = me_events[0]
+    rp_event = rp_events[0]
+    diff_event = {
+        "precip_jm2": me_event["precip_jm2"] - rp_event["precip_jm2"],
+        "evap_jm2": me_event["evap_jm2"] - rp_event["evap_jm2"],
+        "conv_jm2": me_event["conv_jm2"] - rp_event["conv_jm2"],
+        "storage_jm2": me_event["storage_jm2"] - rp_event["storage_jm2"],
+        "closed_jm2": me_event["closed_jm2"] - rp_event["closed_jm2"],
+        "residual_jm2": me_event["residual_jm2"] - rp_event["residual_jm2"],
+    }
 
     smooth_hours = float(me_budget_plot.attrs["event_smooth_hours"])
     precip_smooth_text = smoothing_label(EVENT_SMOOTH_HOURS)
@@ -858,40 +874,26 @@ def plot_spike_budget(me_series, rp_series, series_kind):
     )
     print(f"  Spike detection threshold: {threshold:7.2f} W m-2")
     print(
-        "  Budget panels focus on the buildup to the dominant spike: "
-        f"{np.datetime_as_string(focus_start, unit='h')} to {np.datetime_as_string(lower_panel_end, unit='h')}"
+        "  S1 event window used for the budget bars: "
+        f"{np.datetime_as_string(event_start, unit='h')} to {np.datetime_as_string(event_end, unit='h')}"
+    )
+    print_event_table(me_events, f"{me_budget_plot.attrs.get('experiment_name', 'Reanalysis-IC')} S1")
+    print_event_table(rp_events, f"{rp_budget_plot.attrs.get('experiment_name', 'IAU-IC')} S1")
+    print(
+        "  Reanalysis - IAU event-integrated difference: "
+        f"P={diff_event['precip_jm2'] / 1.0e6:6.2f}, "
+        f"E={diff_event['evap_jm2'] / 1.0e6:6.2f}, "
+        f"MC={diff_event['conv_jm2'] / 1.0e6:6.2f}, "
+        f"-dL={diff_event['storage_jm2'] / 1.0e6:6.2f}, "
+        f"closed={diff_event['closed_jm2'] / 1.0e6:6.2f}, "
+        f"residual={diff_event['residual_jm2'] / 1.0e6:6.2f} MJ m-2"
     )
 
-    time_values = me_precip_plot.time.values
-    me_budget_focus = me_budget_line.sel(time=slice(focus_start, lower_panel_end))
-    rp_budget_focus = rp_budget_line.sel(time=slice(focus_start, lower_panel_end))
-
-    me_cum_precip = cumulative_flux_series(me_budget_focus["Precip"]) * 1.0e-6
-    me_cum_lhf = cumulative_flux_series(me_budget_focus["LHF"]) * 1.0e-6
-    me_cum_conv = cumulative_flux_series(me_budget_focus["MoistureConvergence"]) * 1.0e-6
-    me_cum_storage = cumulative_flux_series(me_budget_focus["StorageRelease"]) * 1.0e-6
-    me_cum_closed = cumulative_flux_series(me_budget_focus["PrecipClosed"]) * 1.0e-6
-
-    diff_focus_precip = me_budget_focus["Precip"] - rp_budget_focus["Precip"]
-    diff_focus_lhf = me_budget_focus["LHF"] - rp_budget_focus["LHF"]
-    diff_focus_conv = me_budget_focus["MoistureConvergence"] - rp_budget_focus["MoistureConvergence"]
-    diff_focus_storage = me_budget_focus["StorageRelease"] - rp_budget_focus["StorageRelease"]
-    diff_focus_closed = me_budget_focus["PrecipClosed"] - rp_budget_focus["PrecipClosed"]
-
-    diff_cum_precip = cumulative_flux_series(diff_focus_precip) * 1.0e-6
-    diff_cum_lhf = cumulative_flux_series(diff_focus_lhf) * 1.0e-6
-    diff_cum_conv = cumulative_flux_series(diff_focus_conv) * 1.0e-6
-    diff_cum_storage = cumulative_flux_series(diff_focus_storage) * 1.0e-6
-    diff_cum_closed = cumulative_flux_series(diff_focus_closed) * 1.0e-6
-
-    me_line_colL_change = (me_budget_focus["col_L"] - me_budget_focus["col_L"].isel(time=0)) * 1.0e-8
-    rp_line_colL_change = (rp_budget_focus["col_L"] - rp_budget_focus["col_L"].isel(time=0)) * 1.0e-8
-
-    fig, axes = plt.subplots(4, 1, figsize=(12, 15), sharex=False)
-    fig.subplots_adjust(hspace=0.24, top=0.93)
+    fig, axes = plt.subplots(3, 1, figsize=(11.5, 11.8), sharex=False)
+    fig.subplots_adjust(hspace=0.28, top=0.92)
     fig.suptitle(
         (
-            f"Moisture-budget view of the precipitation spike "
+            f"Spike-window moisture budget of the precipitation event "
             f"({plot_label}, precip {precip_smooth_text} / budget {budget_smooth_text})"
         ),
         fontsize=15,
@@ -900,8 +902,10 @@ def plot_spike_budget(me_series, rp_series, series_kind):
 
     ax = axes[0]
     shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_precip_line.time.values, me_precip_line["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
-    ax.plot(rp_precip_line.time.values, rp_precip_line["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
+    me_precip_focus = me_precip_line.sel(time=slice(plot_start, plot_end))
+    rp_precip_focus = rp_precip_line.sel(time=slice(plot_start, plot_end))
+    ax.plot(me_precip_focus.time.values, me_precip_focus["Precip"], color="navy", linewidth=2.8, label="Reanalysis IC")
+    ax.plot(rp_precip_focus.time.values, rp_precip_focus["Precip"], color="darkorange", linewidth=2.3, label="IAU IC")
     ax.scatter(
         time_values[spike_indices],
         me_precip_plot["Precip"].isel(time=spike_indices),
@@ -919,157 +923,131 @@ def plot_spike_budget(me_series, rp_series, series_kind):
             fontsize=10,
         )
     ax.set_ylabel(r"$L_v P$ [W m$^{-2}$]")
-    ax.set_title("(a) Precipitation spike timing", loc="left", fontweight="bold")
+    ax.set_title("(a) S1 precipitation-heating time series", loc="left", fontweight="bold")
     ax.legend(loc="upper right", ncol=3, frameon=False, fontsize=10)
+    ax.set_xlim(plot_start, plot_end)
 
     ax = axes[1]
-    shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    line_mc = ax.plot(
-        me_budget_focus.time.values,
-        me_cum_conv,
-        color="tab:green",
-        linewidth=1.7,
-        alpha=0.72,
-        label=r"$\int MC\,dt$",
-        zorder=1,
-    )[0]
-    line_storage = ax.plot(
-        me_budget_focus.time.values,
-        me_cum_storage,
-        color="tab:purple",
-        linewidth=1.8,
-        linestyle="--",
-        alpha=0.72,
-        label=r"$\int storage\,dt$",
-        zorder=1,
-    )[0]
-    line_lhf = ax.plot(
-        me_budget_focus.time.values,
-        me_cum_lhf,
-        color="tab:blue",
-        linewidth=1.9,
-        alpha=0.90,
-        label=r"$\int E\,dt$",
-        zorder=2,
-    )[0]
-    line_closed = ax.plot(
-        me_budget_focus.time.values,
-        me_cum_closed,
-        color="firebrick",
-        linewidth=2.9,
-        linestyle=":",
-        label=r"Net $\int(E + MC + storage)\,dt$",
-        zorder=4,
-    )[0]
-    line_precip = ax.plot(
-        me_budget_focus.time.values,
-        me_cum_precip,
-        color="black",
-        linewidth=2.8,
-        label=r"$\int L_vP\,dt$",
-        zorder=5,
-    )[0]
+    budget_labels = [
+        r"$\int L_vP\,dt$",
+        r"$\int E\,dt$",
+        r"$\int MC\,dt$",
+        r"$-\Delta\langle L_vq \rangle$",
+        "Closed",
+    ]
+    budget_colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
+    me_budget_values = np.array(
+        [
+            me_event["precip_jm2"],
+            me_event["evap_jm2"],
+            me_event["conv_jm2"],
+            me_event["storage_jm2"],
+            me_event["closed_jm2"],
+        ],
+        dtype=float,
+    ) * 1.0e-6
+    x = np.arange(len(budget_labels))
+    bars = ax.bar(
+        x,
+        me_budget_values,
+        color=budget_colors,
+        alpha=0.88,
+        width=0.72,
+        edgecolor="none",
+    )
+    bars[-1].set_hatch("//")
+    bars[-1].set_edgecolor("firebrick")
+    bars[-1].set_linewidth(1.3)
+    for bar, value in zip(bars, me_budget_values):
+        offset = 6.0 if value >= 0.0 else -8.0
+        va = "bottom" if value >= 0.0 else "top"
+        ax.annotate(
+            f"{value:.1f}",
+            (bar.get_x() + bar.get_width() * 0.5, value),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            fontsize=9,
+        )
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel(r"MJ m$^{-2}$")
-    ax.set_title("(b) Cumulative moisture sources leading into S1", loc="left", fontweight="bold")
-    ax.legend(
-        [line_precip, line_closed, line_lhf, line_mc, line_storage],
-        [line_precip.get_label(), line_closed.get_label(), line_lhf.get_label(), line_mc.get_label(), line_storage.get_label()],
-        loc="upper right",
-        ncol=2,
-        frameon=False,
-        fontsize=10,
+    ax.set_xticks(x)
+    ax.set_xticklabels(budget_labels, rotation=0)
+    ax.set_title("(b) S1 event-integrated moisture budget", loc="left", fontweight="bold")
+    ax.text(
+        0.02,
+        0.96,
+        (
+            f"Window: {np.datetime_as_string(event_start, unit='h')} to "
+            f"{np.datetime_as_string(event_end, unit='h')}\n"
+            f"closure residual = {me_event['residual_jm2'] / 1.0e6:.2f} MJ m$^{{-2}}$"
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
     )
 
     ax = axes[2]
-    shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    ax.plot(me_budget_focus.time.values, me_line_colL_change, color="navy", linewidth=2.6, label="Reanalysis IC")
-    ax.plot(rp_budget_focus.time.values, rp_line_colL_change, color="darkorange", linewidth=2.4, label="IAU IC")
-    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
-    ax.set_ylabel(r"$\Delta\langle L_v q \rangle$ [$10^8$ J m$^{-2}$]")
-    ax.set_title("(c) Column moisture buildup leading into S1", loc="left", fontweight="bold")
-    ax.legend(loc="upper right", frameon=False, fontsize=10)
-
-    ax = axes[3]
-    shade_spike_windows(ax, time_values, spike_indices, half_window_steps)
-    diff_line_mc = ax.plot(
-        me_budget_focus.time.values,
-        diff_cum_conv,
-        color="tab:green",
-        linewidth=1.7,
-        alpha=0.72,
-        label=r"$\int \Delta MC\,dt$",
-        zorder=1,
-    )[0]
-    diff_line_storage = ax.plot(
-        me_budget_focus.time.values,
-        diff_cum_storage,
-        color="tab:purple",
-        linewidth=1.8,
-        linestyle="--",
-        alpha=0.72,
-        label=r"$\int \Delta storage\,dt$",
-        zorder=1,
-    )[0]
-    diff_line_lhf = ax.plot(
-        me_budget_focus.time.values,
-        diff_cum_lhf,
-        color="tab:blue",
-        linewidth=1.9,
-        alpha=0.90,
-        label=r"$\int \Delta E\,dt$",
-        zorder=2,
-    )[0]
-    diff_line_closed = ax.plot(
-        me_budget_focus.time.values,
-        diff_cum_closed,
-        color="firebrick",
-        linewidth=2.9,
-        linestyle=":",
-        label=r"Net $\int \Delta(E + MC + storage)\,dt$",
-        zorder=4,
-    )[0]
-    diff_line_precip = ax.plot(
-        me_budget_focus.time.values,
-        diff_cum_precip,
-        color="black",
-        linewidth=2.8,
-        label=r"$\int \Delta L_vP\,dt$",
-        zorder=5,
-    )[0]
+    diff_budget_values = np.array(
+        [
+            diff_event["precip_jm2"],
+            diff_event["evap_jm2"],
+            diff_event["conv_jm2"],
+            diff_event["storage_jm2"],
+            diff_event["closed_jm2"],
+        ],
+        dtype=float,
+    ) * 1.0e-6
+    diff_bars = ax.bar(
+        x,
+        diff_budget_values,
+        color=budget_colors,
+        alpha=0.88,
+        width=0.72,
+        edgecolor="none",
+    )
+    diff_bars[-1].set_hatch("//")
+    diff_bars[-1].set_edgecolor("firebrick")
+    diff_bars[-1].set_linewidth(1.3)
+    for bar, value in zip(diff_bars, diff_budget_values):
+        offset = 6.0 if value >= 0.0 else -8.0
+        va = "bottom" if value >= 0.0 else "top"
+        ax.annotate(
+            f"{value:.1f}",
+            (bar.get_x() + bar.get_width() * 0.5, value),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            fontsize=9,
+        )
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(d) Why is the Reanalysis-IC S1 spike larger?", loc="left", fontweight="bold")
-    ax.legend(
-        [diff_line_precip, diff_line_closed, diff_line_lhf, diff_line_mc, diff_line_storage],
-        [
-            diff_line_precip.get_label(),
-            diff_line_closed.get_label(),
-            diff_line_lhf.get_label(),
-            diff_line_mc.get_label(),
-            diff_line_storage.get_label(),
-        ],
-        loc="upper right",
-        ncol=2,
-        frameon=False,
-        fontsize=10,
+    ax.set_xticks(x)
+    ax.set_xticklabels(budget_labels, rotation=0)
+    ax.set_title("(c) Why is the Reanalysis-IC S1 spike larger?", loc="left", fontweight="bold")
+    ax.text(
+        0.02,
+        0.96,
+        f"closure residual diff = {diff_event['residual_jm2'] / 1.0e6:.2f} MJ m$^{{-2}}$",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
     )
 
     for ax in axes:
         ax.grid(True, linestyle=":", alpha=0.6)
         ax.tick_params(axis="both", labelsize=10)
 
-    for ax in axes:
-        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-
-    for ax in axes[1:]:
-        ax.set_xlim(focus_start, lower_panel_end)
-
-    axes[0].set_xlim(focus_start, focus_end)
+    axes[0].xaxis.set_major_locator(mdates.HourLocator(interval=6))
+    axes[0].xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%HZ"))
     axes[0].set_xlabel("Time Around S1")
-    axes[1].tick_params(labelbottom=False)
-    axes[2].tick_params(labelbottom=False)
-    axes[-1].set_xlabel("Time Around S1")
+    axes[-1].set_xlabel("Integrated S1-window budget terms")
 
     plt.savefig(output_fig, dpi=300, bbox_inches="tight")
     plt.close(fig)
