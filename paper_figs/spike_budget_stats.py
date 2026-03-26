@@ -24,6 +24,7 @@ BOOTSTRAP_SAMPLES = 20000
 PERMUTATION_SAMPLES = 20000
 RNG_SEED = 42
 ENSEMBLE_EQUIVALENT_FACTOR = 10
+ROBUST_TRIM_FRACTION = 0.10
 
 CACHE_DIR = Path(__file__).with_name("cache_multi_spike_v1")
 EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_budget_events.csv")
@@ -287,9 +288,22 @@ def paired_signflip_pvalue(values, n_resamples=PERMUTATION_SAMPLES, seed=RNG_SEE
     return float((np.count_nonzero(sample_means >= observed - 1.0e-12) + 1) / (n_resamples + 1))
 
 
-def sample_sem(values):
+def trimmed_values(values, trim_fraction=ROBUST_TRIM_FRACTION):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
+    n = values.size
+    if n == 0:
+        return values
+    if trim_fraction <= 0.0 or n < 5:
+        return values
+    k = int(np.floor(trim_fraction * n))
+    if k <= 0 or 2 * k >= n:
+        return values
+    return np.sort(values)[k : n - k]
+
+
+def sample_sem(values):
+    values = trimmed_values(values)
     n = values.size
     if n <= 1:
         return 0.0
@@ -457,20 +471,6 @@ def plot_summary(all_rows, overall_summary):
     ax.set_ylabel("MJ m$^{-2}$")
     ax.set_title("(a) Mean event-integrated moisture budget across all spike windows", loc="left", fontweight="bold")
     ax.legend(loc="upper left", frameon=False)
-    ax.text(
-        0.01,
-        0.96,
-        (
-            f"Detection: max(Reanalysis, IAU) {mb.smoothing_label(PRECIP_SMOOTH_HOURS)}, "
-            f">{SPIKE_QUANTILE:.2f} quantile, min separation {MIN_PEAK_SEPARATION_HOURS:.0f} h, "
-            f"window +/-{0.5 * EVENT_WINDOW_HOURS:.0f} h"
-        ),
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
-    )
 
     ax = axes[1]
     bars = ax.bar(x, mean_diff, color=colors, alpha=0.88, yerr=diff_yerr, capsize=4)
