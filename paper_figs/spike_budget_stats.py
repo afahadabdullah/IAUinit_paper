@@ -410,30 +410,22 @@ def summarize_components(rows, region_name=None):
     return summary
 
 
-def plot_summary(all_rows, overall_summary, pacific_summary):
+def plot_summary(pacific_rows, pacific_summary):
     labels = [label for _, label in COMPONENTS]
-    ensemble_equivalent_total = ENSEMBLE_EQUIVALENT_FACTOR * len(all_rows)
 
-    mean_rean = np.array([row["rean_mean_mj"] for row in overall_summary], dtype=float)
-    mean_iau = np.array([row["iau_mean_mj"] for row in overall_summary], dtype=float)
-    mean_diff = np.array([row["diff_mean_mj"] for row in overall_summary], dtype=float)
+    mean_rean = np.array([row["rean_mean_mj"] for row in pacific_summary], dtype=float)
+    mean_iau = np.array([row["iau_mean_mj"] for row in pacific_summary], dtype=float)
 
     rean_yerr = np.vstack(
         [
-            np.array([row["rean_sem_mj"] for row in overall_summary], dtype=float),
-            np.array([row["rean_sem_mj"] for row in overall_summary], dtype=float),
+            np.array([row["rean_sem_mj"] for row in pacific_summary], dtype=float),
+            np.array([row["rean_sem_mj"] for row in pacific_summary], dtype=float),
         ]
     )
     iau_yerr = np.vstack(
         [
-            np.array([row["iau_sem_mj"] for row in overall_summary], dtype=float),
-            np.array([row["iau_sem_mj"] for row in overall_summary], dtype=float),
-        ]
-    )
-    diff_yerr = np.vstack(
-        [
-            np.array([row["diff_sem_mj"] for row in overall_summary], dtype=float),
-            np.array([row["diff_sem_mj"] for row in overall_summary], dtype=float),
+            np.array([row["iau_sem_mj"] for row in pacific_summary], dtype=float),
+            np.array([row["iau_sem_mj"] for row in pacific_summary], dtype=float),
         ]
     )
 
@@ -442,23 +434,7 @@ def plot_summary(all_rows, overall_summary, pacific_summary):
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
-    fig.subplots_adjust(wspace=0.25, top=0.79, left=0.08, right=0.98, bottom=0.14)
-    fig.suptitle(
-        "Multi-event spike-window moisture budget statistics\n"
-        "All detected spikes across the six spike_pr regions",
-        fontsize=14,
-    )
-    fig.text(
-        0.5,
-        0.82,
-        (
-            f"Detected regional spike windows = {len(all_rows)}; "
-            f"10-member equivalent total = {ensemble_equivalent_total}"
-        ),
-        ha="center",
-        va="center",
-        fontsize=10,
-    )
+    fig.subplots_adjust(wspace=0.25, top=0.92, left=0.08, right=0.98, bottom=0.14)
 
     ax = axes[0]
     ax.bar(x - width / 2, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Reanalysis IC")
@@ -467,7 +443,7 @@ def plot_summary(all_rows, overall_summary, pacific_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("MJ m$^{-2}$")
-    ax.set_title("(a) Mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
+    ax.set_title("(a) Tropical Pacific mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
 
     ax = axes[1]
@@ -566,10 +542,8 @@ def main():
         region_rows = [row for row in all_rows if row["region_key"] == region["key"]]
         region_summary_rows.extend(summarize_components(region_rows, region_name=region["title"]))
 
-    overall_summary = summarize_components(all_rows)
     pacific_rows = [row for row in all_rows if row["region_key"] in PACIFIC_REGION_KEYS]
     pacific_summary = summarize_components(pacific_rows, region_name="Tropical Pacific")
-    print_component_summary(overall_summary)
     print("\nTropical Pacific paired-difference summary")
     for row in pacific_summary:
         print(
@@ -591,12 +565,12 @@ def main():
         "diff_sem_mj",
         "pvalue",
     ]
-    write_csv(SUMMARY_PATH, overall_summary, summary_fields)
+    write_csv(SUMMARY_PATH, pacific_summary, summary_fields)
     write_csv(REGION_SUMMARY_PATH, region_summary_rows, summary_fields)
     print(f"Overall summary saved to {SUMMARY_PATH}")
     print(f"Region summary saved to {REGION_SUMMARY_PATH}")
 
-    plot_summary(all_rows, overall_summary, pacific_summary)
+    plot_summary(pacific_rows, pacific_summary)
 
 
 if __name__ == "__main__":
