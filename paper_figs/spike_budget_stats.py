@@ -430,15 +430,16 @@ def plot_summary(pacific_rows, pacific_summary):
     )
 
     x = np.arange(len(labels))
-    width = 0.28
+    width = 0.42
+    pair_offset = 0.24
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
     fig.subplots_adjust(wspace=0.25)
 
     ax = axes[0]
-    ax.bar(x - width / 2, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Dynamically Imbalanced")
-    ax.bar(x + width / 2, mean_iau, width=width, color="darkorange", alpha=0.9, yerr=iau_yerr, capsize=4, label="Dynamically Balanced")
+    ax.bar(x - pair_offset, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Dynamically Imbalanced")
+    ax.bar(x + pair_offset, mean_iau, width=width, color="darkorange", alpha=0.9, yerr=iau_yerr, capsize=4, label="Dynamically Balanced")
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
@@ -454,15 +455,15 @@ def plot_summary(pacific_rows, pacific_summary):
             np.array([row["diff_sem_mj"] for row in pacific_summary], dtype=float),
         ]
     )
-    bars = ax.bar(x, pacific_mean_diff, color=colors, alpha=0.88, yerr=pacific_diff_yerr, capsize=4)
+    bars = ax.bar(x, pacific_mean_diff, width=width, color=colors, alpha=0.88, yerr=pacific_diff_yerr, capsize=4)
     bars[-1].set_hatch("//")
     bars[-1].set_edgecolor("firebrick")
     bars[-1].set_linewidth(1.3)
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Dynamically Imbalanced - Dynamically Balanced\n[MJ m$^{-2}$]")
-    ax.set_title("(b) Paired difference", loc="left", fontweight="bold", fontsize=12)
+    ax.set_ylabel("Ensemble mean difference\n(Dynamically Imbalanced - Dynamically Balanced)\n[MJ m$^{-2}$]")
+    ax.set_title("(b) Ensemble mean difference", loc="left", fontweight="bold", fontsize=12)
     for xpos, row, value in zip(x, pacific_summary, pacific_mean_diff):
         if value >= 0.0:
             yloc = value + pacific_diff_yerr[1, xpos] + 2.0
@@ -545,7 +546,7 @@ def main():
 
     pacific_rows = [row for row in all_rows if row["region_key"] in PACIFIC_REGION_KEYS]
     pacific_summary = summarize_components(pacific_rows, region_name="Tropical Pacific")
-    print("\nTropical Pacific paired-difference summary")
+    print("\nTropical Pacific ensemble-mean difference summary")
     for row in pacific_summary:
         print(
             f"  {row['component_label']}: "
