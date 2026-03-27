@@ -430,11 +430,11 @@ def plot_summary(pacific_rows, pacific_summary):
     )
 
     x = np.arange(len(labels))
-    width = 0.36
+    width = 0.28
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
-    fig.subplots_adjust(wspace=0.25, top=0.92, left=0.08, right=0.98, bottom=0.14)
+    fig.subplots_adjust(wspace=0.25)
 
     ax = axes[0]
     ax.bar(x - width / 2, mean_rean, width=width, color="navy", alpha=0.9, yerr=rean_yerr, capsize=4, label="Dynamically Imbalanced")
@@ -443,7 +443,7 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("MJ m$^{-2}$")
-    ax.set_title("(a) Tropical Pacific mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
+    ax.set_title("(a) Mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
 
     ax = axes[1]
@@ -462,7 +462,7 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Dynamically Imbalanced - Dynamically Balanced\n[MJ m$^{-2}$]")
-    ax.set_title("(b) Tropical Pacific paired difference with Wilcoxon p-values", loc="left", fontweight="bold", fontsize=12)
+    ax.set_title("(b) Paired difference", loc="left", fontweight="bold", fontsize=12)
     for xpos, row, value in zip(x, pacific_summary, pacific_mean_diff):
         if value >= 0.0:
             yloc = value + pacific_diff_yerr[1, xpos] + 2.0
@@ -483,6 +483,7 @@ def plot_summary(pacific_rows, pacific_summary):
         ax.grid(True, linestyle=":", alpha=0.6)
         ax.tick_params(axis="both", labelsize=10)
 
+    fig.tight_layout()
     plt.savefig(FIGURE_PATH, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Figure saved to {FIGURE_PATH}")
