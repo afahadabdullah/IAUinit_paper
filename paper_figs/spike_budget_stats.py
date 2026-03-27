@@ -409,7 +409,32 @@ def summarize_components(rows, region_name=None):
     return summary
 
 
-def plot_summary(all_rows, overall_summary):
+def summarize_across_regions(region_summary_rows):
+    summary = []
+    for key, label in COMPONENTS:
+        comp_rows = [row for row in region_summary_rows if row["component_key"] == key]
+        rean_vals = np.array([row["rean_mean_mj"] for row in comp_rows], dtype=float)
+        iau_vals = np.array([row["iau_mean_mj"] for row in comp_rows], dtype=float)
+        diff_vals = np.array([row["diff_mean_mj"] for row in comp_rows], dtype=float)
+        summary.append(
+            {
+                "region_name": "REGION_MEAN",
+                "component_key": key,
+                "component_label": label,
+                "n_events": int(len(diff_vals)),
+                "rean_mean_mj": float(np.nanmean(rean_vals)),
+                "rean_sem_mj": sample_sem(rean_vals),
+                "iau_mean_mj": float(np.nanmean(iau_vals)),
+                "iau_sem_mj": sample_sem(iau_vals),
+                "diff_mean_mj": float(np.nanmean(diff_vals)),
+                "diff_sem_mj": sample_sem(diff_vals),
+                "pvalue": paired_wilcoxon_pvalue(diff_vals),
+            }
+        )
+    return summary
+
+
+def plot_summary(all_rows, overall_summary, region_overall_summary):
     labels = [label for _, label in COMPONENTS]
     ensemble_equivalent_total = ENSEMBLE_EQUIVALENT_FACTOR * len(all_rows)
 
@@ -470,7 +495,14 @@ def plot_summary(all_rows, overall_summary):
     ax.legend(loc="upper left", frameon=False)
 
     ax = axes[1]
-    bars = ax.bar(x, mean_diff, color=colors, alpha=0.88, yerr=diff_yerr, capsize=4)
+    region_mean_diff = np.array([row["diff_mean_mj"] for row in region_overall_summary], dtype=float)
+    region_diff_yerr = np.vstack(
+        [
+            np.array([row["diff_sem_mj"] for row in region_overall_summary], dtype=float),
+            np.array([row["diff_sem_mj"] for row in region_overall_summary], dtype=float),
+        ]
+    )
+    bars = ax.bar(x, region_mean_diff, color=colors, alpha=0.88, yerr=region_diff_yerr, capsize=4)
     bars[-1].set_hatch("//")
     bars[-1].set_edgecolor("firebrick")
     bars[-1].set_linewidth(1.3)
@@ -478,13 +510,13 @@ def plot_summary(all_rows, overall_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(b) Mean paired difference with Wilcoxon p-values", loc="left", fontweight="bold", fontsize=12)
-    for xpos, row, value in zip(x, overall_summary, mean_diff):
+    ax.set_title("(b) Region-mean paired difference with Wilcoxon p-values", loc="left", fontweight="bold", fontsize=12)
+    for xpos, row, value in zip(x, region_overall_summary, region_mean_diff):
         if value >= 0.0:
-            yloc = value + diff_yerr[1, xpos] + 2.0
+            yloc = value + region_diff_yerr[1, xpos] + 2.0
             va = "bottom"
         else:
-            yloc = value - diff_yerr[0, xpos] - 2.0
+            yloc = value - region_diff_yerr[0, xpos] - 2.0
             va = "top"
         ax.text(
             xpos,
@@ -559,7 +591,15 @@ def main():
         region_summary_rows.extend(summarize_components(region_rows, region_name=region["title"]))
 
     overall_summary = summarize_components(all_rows)
+    region_overall_summary = summarize_across_regions(region_summary_rows)
     print_component_summary(overall_summary)
+    print("\nAcross-region paired-difference summary")
+    for row in region_overall_summary:
+        print(
+            f"  {row['component_label']}: "
+            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_sem_mj']:6.2f}, "
+            f"p={row['pvalue']:.4f}"
+        )
 
     summary_fields = [
         "region_name",
@@ -579,7 +619,7 @@ def main():
     print(f"Overall summary saved to {SUMMARY_PATH}")
     print(f"Region summary saved to {REGION_SUMMARY_PATH}")
 
-    plot_summary(all_rows, overall_summary)
+    plot_summary(all_rows, overall_summary, region_overall_summary)
 
 
 if __name__ == "__main__":
