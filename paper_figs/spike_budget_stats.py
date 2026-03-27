@@ -24,7 +24,7 @@ MAX_SPIKES_PER_REGION = 999
 BOOTSTRAP_SAMPLES = 20000
 RNG_SEED = 42
 ENSEMBLE_EQUIVALENT_FACTOR = 10
-ROBUST_TRIM_FRACTION = 0.10
+ROBUST_TRIM_FRACTION = 0.20
 
 CACHE_DIR = Path(__file__).with_name("cache_multi_spike_v1")
 EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_budget_events.csv")
