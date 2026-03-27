@@ -265,15 +265,24 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
     return series
 
 
-def paired_ttest_pvalue(values):
+def paired_wilcoxon_pvalue(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
-    n = values.size
-    if n <= 1:
+    if values.size <= 1:
         return np.nan
     if np.allclose(values, 0.0):
         return 1.0
-    return float(stats.ttest_1samp(values, popmean=0.0, alternative="two-sided").pvalue)
+    nonzero = values[~np.isclose(values, 0.0)]
+    if nonzero.size <= 1:
+        return 1.0
+    return float(
+        stats.wilcoxon(
+            values,
+            zero_method="wilcox",
+            alternative="two-sided",
+            method="auto",
+        ).pvalue
+    )
 
 
 def trimmed_values(values, trim_fraction=ROBUST_TRIM_FRACTION):
@@ -394,7 +403,7 @@ def summarize_components(rows, region_name=None):
                 "iau_sem_mj": sample_sem(rp_vals),
                 "diff_mean_mj": float(np.nanmean(diff_vals)),
                 "diff_sem_mj": sample_sem(diff_vals),
-                "pvalue": paired_ttest_pvalue(diff_vals),
+                "pvalue": paired_wilcoxon_pvalue(diff_vals),
             }
         )
     return summary
@@ -432,22 +441,22 @@ def plot_summary(all_rows, overall_summary):
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
-    fig.subplots_adjust(wspace=0.24, top=0.84, left=0.08, right=0.98, bottom=0.14)
+    fig.subplots_adjust(wspace=0.25, top=0.79, left=0.08, right=0.98, bottom=0.14)
     fig.suptitle(
         "Multi-event spike-window moisture budget statistics\n"
         "All detected spikes across the six spike_pr regions",
-        fontsize=15,
+        fontsize=14,
     )
     fig.text(
         0.5,
-        0.86,
+        0.82,
         (
             f"Detected regional spike windows = {len(all_rows)}; "
             f"10-member equivalent total = {ensemble_equivalent_total}"
         ),
         ha="center",
         va="center",
-        fontsize=11,
+        fontsize=10,
     )
 
     ax = axes[0]
@@ -457,7 +466,7 @@ def plot_summary(all_rows, overall_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("MJ m$^{-2}$")
-    ax.set_title("(a) Mean event-integrated moisture budget across all spike windows", loc="left", fontweight="bold")
+    ax.set_title("(a) Mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
 
     ax = axes[1]
@@ -469,7 +478,7 @@ def plot_summary(all_rows, overall_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(b) Mean paired difference with t-test p-values", loc="left", fontweight="bold")
+    ax.set_title("(b) Mean paired difference with Wilcoxon p-values", loc="left", fontweight="bold", fontsize=12)
     for xpos, row, value in zip(x, overall_summary, mean_diff):
         if value >= 0.0:
             yloc = value + diff_yerr[1, xpos] + 2.0
