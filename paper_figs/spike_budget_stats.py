@@ -4,6 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 import xarray as xr
 
 import mse_budget as mb
@@ -21,7 +22,6 @@ PRECIP_SMOOTH_HOURS = 6.0
 BUDGET_SMOOTH_HOURS = 0.0
 MAX_SPIKES_PER_REGION = 999
 BOOTSTRAP_SAMPLES = 20000
-PERMUTATION_SAMPLES = 20000
 RNG_SEED = 42
 ENSEMBLE_EQUIVALENT_FACTOR = 10
 ROBUST_TRIM_FRACTION = 0.10
@@ -265,27 +265,15 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
     return series
 
 
-def paired_signflip_pvalue(values, n_resamples=PERMUTATION_SAMPLES, seed=RNG_SEED):
+def paired_ttest_pvalue(values):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     n = values.size
-    if n == 0:
+    if n <= 1:
         return np.nan
     if np.allclose(values, 0.0):
         return 1.0
-
-    observed = abs(values.mean())
-    if n <= 18:
-        masks = np.arange(1 << n, dtype=np.uint32)[:, None]
-        bits = ((masks >> np.arange(n, dtype=np.uint32)) & 1).astype(np.int8)
-        signs = 1 - 2 * bits
-        sample_means = np.abs((signs * values[None, :]).mean(axis=1))
-        return float(np.mean(sample_means >= observed - 1.0e-12))
-
-    rng = np.random.default_rng(seed)
-    signs = rng.choice(np.array([-1.0, 1.0]), size=(n_resamples, n))
-    sample_means = np.abs((signs * values[None, :]).mean(axis=1))
-    return float((np.count_nonzero(sample_means >= observed - 1.0e-12) + 1) / (n_resamples + 1))
+    return float(stats.ttest_1samp(values, popmean=0.0, alternative="two-sided").pvalue)
 
 
 def trimmed_values(values, trim_fraction=ROBUST_TRIM_FRACTION):
@@ -406,7 +394,7 @@ def summarize_components(rows, region_name=None):
                 "iau_sem_mj": sample_sem(rp_vals),
                 "diff_mean_mj": float(np.nanmean(diff_vals)),
                 "diff_sem_mj": sample_sem(diff_vals),
-                "pvalue": paired_signflip_pvalue(diff_vals),
+                "pvalue": paired_ttest_pvalue(diff_vals),
             }
         )
     return summary
@@ -443,16 +431,16 @@ def plot_summary(all_rows, overall_summary):
     width = 0.36
     colors = ["black", "tab:blue", "tab:green", "tab:purple", "firebrick"]
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 9.2))
-    fig.subplots_adjust(hspace=0.32, top=0.88)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
+    fig.subplots_adjust(wspace=0.24, top=0.84, left=0.08, right=0.98, bottom=0.14)
     fig.suptitle(
         "Multi-event spike-window moisture budget statistics\n"
         "All detected spikes across the six spike_pr regions",
-        fontsize=16,
+        fontsize=15,
     )
     fig.text(
         0.5,
-        0.905,
+        0.86,
         (
             f"Detected regional spike windows = {len(all_rows)}; "
             f"10-member equivalent total = {ensemble_equivalent_total}"
@@ -481,13 +469,13 @@ def plot_summary(all_rows, overall_summary):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Reanalysis - IAU\n[MJ m$^{-2}$]")
-    ax.set_title("(b) Mean paired difference with sign-flip p-values", loc="left", fontweight="bold")
+    ax.set_title("(b) Mean paired difference with t-test p-values", loc="left", fontweight="bold")
     for xpos, row, value in zip(x, overall_summary, mean_diff):
         if value >= 0.0:
-            yloc = value + diff_yerr[1, xpos] + 3.0
+            yloc = value + diff_yerr[1, xpos] + 2.0
             va = "bottom"
         else:
-            yloc = value - diff_yerr[0, xpos] - 3.0
+            yloc = value - diff_yerr[0, xpos] - 2.0
             va = "top"
         ax.text(
             xpos,
