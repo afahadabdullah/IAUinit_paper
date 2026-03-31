@@ -26,7 +26,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from matplotlib.lines import Line2D
 
 
 DEFAULT_INPUT = Path("phase_locking_data/phase_locking_ME506.nc")
@@ -615,92 +614,11 @@ def compute_significance(
     )
 
 
-def format_lon_labels(ax: plt.Axes, xticks: np.ndarray) -> None:
-    labels = []
-    for lon in xticks:
-        if lon <= 180:
-            labels.append(f"{lon:.0f}\N{DEGREE SIGN}E")
-        else:
-            labels.append(f"{360 - lon:.0f}\N{DEGREE SIGN}W")
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(labels)
-
-
 def make_plot(
-    olr: xr.DataArray,
-    spike: xr.DataArray,
-    lag_days: xr.DataArray,
-    metrics: xr.Dataset,
     panel_data: xr.Dataset,
     output_path: Path,
-    label: str,
-    olr_threshold: float,
 ) -> None:
-    fig = plt.figure(figsize=(11.5, 8.5))
-
-    ax1 = fig.add_subplot(2, 1, 1)
-    levels = np.array([-50, -40, -30, -20, -10, -0.5, 0.5, 10, 20, 30, 40, 50])
-    cf = olr.plot.contourf(
-        ax=ax1,
-        levels=levels,
-        extend="both",
-        alpha=0.85,
-        cmap="RdBu_r",
-        add_colorbar=False,
-    )
-    spike.plot.contour(
-        ax=ax1,
-        colors="black",
-        levels=np.array([SPIKE_THRESHOLD]),
-        alpha=0.5,
-        add_colorbar=False,
-    )
-    olr.plot.contour(
-        ax=ax1,
-        colors="gold",
-        levels=np.array([olr_threshold]),
-        linewidths=2.0,
-        linestyles="--",
-        alpha=0.9,
-        add_colorbar=False,
-    )
-    format_lon_labels(ax1, np.arange(120, 300, 30))
-
-    time_values = olr["time"].values
-    tick_offsets = np.arange(0, 28, 4)
-    tick_times = pd.to_datetime(time_values[0]) + pd.to_timedelta(tick_offsets, unit="D")
-    valid_ticks = tick_times <= pd.to_datetime(time_values[-1])
-    ax1.set_yticks(tick_times[valid_ticks])
-    ax1.set_yticklabels((tick_offsets[valid_ticks] - 10).astype(int), fontsize=12)
-    ax1.set_ylabel("Lag/Lead days", fontsize=14)
-
-    x_mark = 240.0
-    y_mark = pd.to_datetime(time_values[0]) + pd.Timedelta(days=11)
-    ax1.plot(
-        x_mark,
-        y_mark,
-        marker="o",
-        markersize=40,
-        color="yellow",
-        markerfacecolor="none",
-        markeredgewidth=5,
-    )
-    ax1.set_title(
-        "Composite mean OLR anomalies during Eastern Pacific Spikes",
-        fontsize=13,
-        fontweight="bold",
-    )
-    ax1.legend(
-        handles=[
-            Line2D([0], [0], color="gold", lw=2.0, ls="--", label=f"Active OLR envelope ({olr_threshold:.0f} W m$^{{-2}}$)"),
-            Line2D([0], [0], color="black", lw=1.5, label="Spike contour (0.25)"),
-        ],
-        loc="upper left",
-        frameon=True,
-    )
-    fig.colorbar(cf, ax=ax1, pad=0.01, label="OLR anomaly")
-
-    ax2 = fig.add_subplot(2, 1, 2)
+    fig, ax2 = plt.subplots(figsize=(8.0, 8.0))
     distance = panel_data["distance_deg"].values.astype(float)
     observed_cdf = panel_data["observed_cdf"].values.astype(float)
     null_cdf_mean = panel_data["null_cdf_mean"].values.astype(float)
@@ -730,7 +648,7 @@ def make_plot(
         color="tab:red",
         lw=2.8,
         label="Observed cumulative spike mass",
-    )
+        )
     ax2.axvline(ENVELOPE_HALF_WIDTH_DEG, color="tab:blue", lw=1.2, ls=":")
     ax2.set_xlim(0.0, distance.max())
     ax2.set_ylim(0.0, 1.02)
@@ -739,7 +657,7 @@ def make_plot(
     ax2.grid(alpha=0.3)
     ax2.legend(loc="lower right", frameon=True)
     ax2.set_title(
-        f"Spike proximity to active OLR envelope aggregated over +/-{int(LAG_WINDOW_DAYS)} days",
+        f"Spike proximity to active OLR envelope\naggregated over +/-{int(LAG_WINDOW_DAYS)} days",
         fontweight="bold",
     )
 
@@ -920,14 +838,8 @@ def main() -> None:
 
     write_summary(metrics, significance, panel_data, args.summary, args.label)
     make_plot(
-        olr=olr,
-        spike=spike,
-        lag_days=lag_days,
-        metrics=metrics,
         panel_data=panel_data,
         output_path=args.plot,
-        label=args.label,
-        olr_threshold=args.olr_threshold,
     )
 
     print(f"Saved plot: {args.plot}")
