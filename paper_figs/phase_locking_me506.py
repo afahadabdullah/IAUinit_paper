@@ -39,6 +39,8 @@ SPIKE_CANDIDATES = ("sp", "spike_506", "spike_composite")
 
 DEFAULT_OLR_THRESHOLD = -5.0
 ENVELOPE_HALF_WIDTH_DEG = 10.0
+DISTANCE_CURVE_MAX_DEG = 30.0
+DISTANCE_CURVE_STEP_DEG = 1.0
 SPIKE_THRESHOLD = 0.25
 MIN_SPIKE_SUM = 1.0e-8
 MIN_OLR_WEIGHT_SUM = 1.0e-8
@@ -176,16 +178,82 @@ def nearest_distance_to_active(lon: np.ndarray, active_mask: np.ndarray) -> np.n
     return np.min(np.abs(signed_lon_difference(lon_2d, active_2d)), axis=1)
 
 
+def analysis_mask_from_lag(lag_days: xr.DataArray) -> np.ndarray:
+    lag = lag_days.values.astype(float)
+    return np.isfinite(lag) & (np.abs(lag) >= 1.0) & (np.abs(lag) <= LAG_WINDOW_DAYS)
+
+
+def spike_weights_from_row(spike_row: np.ndarray) -> np.ndarray:
+    spike_weights = np.where(spike_row >= SPIKE_THRESHOLD, spike_row, 0.0)
+    if np.nansum(spike_weights) <= MIN_SPIKE_SUM:
+        spike_weights = np.clip(spike_row, a_min=0.0, a_max=None)
+    return spike_weights
+
+
+def collect_distance_sample(
+    olr_row: np.ndarray,
+    spike_row: np.ndarray,
+    lon: np.ndarray,
+    olr_threshold: float,
+) -> dict[str, np.ndarray | float] | None:
+    active_mask = olr_row <= olr_threshold
+    if not active_mask.any():
+        return None
+
+    spike_weights = spike_weights_from_row(spike_row)
+    total_spike = np.nansum(spike_weights)
+    if total_spike <= MIN_SPIKE_SUM:
+        return None
+
+    nearest_distance = nearest_distance_to_active(lon, active_mask)
+    buffer_mask = nearest_distance <= ENVELOPE_HALF_WIDTH_DEG
+    valid = np.isfinite(nearest_distance) & np.isfinite(spike_weights) & (spike_weights > 0.0)
+    if not valid.any():
+        return None
+
+    return {
+        "distances": nearest_distance[valid].astype(float),
+        "weights": spike_weights[valid].astype(float),
+        "inside_fraction": float(np.nansum(spike_weights[active_mask]) / total_spike),
+        "within_buffer_fraction": float(np.nansum(spike_weights[buffer_mask]) / total_spike),
+        "mean_distance_deg": float(np.nansum(spike_weights * nearest_distance) / total_spike),
+    }
+
+
+def weighted_cdf(
+    distances: np.ndarray,
+    weights: np.ndarray,
+    distance_grid: np.ndarray,
+) -> np.ndarray:
+    total_weight = np.nansum(weights)
+    if total_weight <= MIN_SPIKE_SUM:
+        return np.full(distance_grid.shape, np.nan, dtype=float)
+    return np.array(
+        [np.nansum(weights[distances <= d]) / total_weight for d in distance_grid],
+        dtype=float,
+    )
+
+
+def weighted_median(distances: np.ndarray, weights: np.ndarray) -> float:
+    total_weight = np.nansum(weights)
+    if total_weight <= MIN_SPIKE_SUM:
+        return float("nan")
+
+    order = np.argsort(distances)
+    sorted_distances = distances[order]
+    sorted_weights = weights[order]
+    cum_weights = np.cumsum(sorted_weights) / total_weight
+    idx = int(np.searchsorted(cum_weights, 0.5, side="left"))
+    idx = min(max(idx, 0), sorted_distances.size - 1)
+    return float(sorted_distances[idx])
+
+
 def row_metrics(
     olr_row: np.ndarray,
     spike_row: np.ndarray,
     lon: np.ndarray,
     olr_threshold: float,
 ) -> dict[str, float]:
-    spike_weights = np.where(spike_row >= SPIKE_THRESHOLD, spike_row, 0.0)
-    if np.nansum(spike_weights) <= MIN_SPIKE_SUM:
-        spike_weights = np.clip(spike_row, a_min=0.0, a_max=None)
-
     out = {
         "spike_fraction_in_active_envelope": np.nan,
         "spike_fraction_within_buffer": np.nan,
@@ -198,6 +266,7 @@ def row_metrics(
         "has_active_envelope": 0.0,
     }
 
+    payload = collect_distance_sample(olr_row, spike_row, lon, olr_threshold)
     active_mask = olr_row <= olr_threshold
     if not active_mask.any():
         return out
@@ -205,17 +274,15 @@ def row_metrics(
     out["has_active_envelope"] = 1.0
     nearest_distance = nearest_distance_to_active(lon, active_mask)
     buffer_mask = nearest_distance <= ENVELOPE_HALF_WIDTH_DEG
-
     out["active_area_fraction"] = active_mask.mean()
     out["buffer_area_fraction"] = buffer_mask.mean()
 
-    total_spike = np.nansum(spike_weights)
-    if total_spike <= MIN_SPIKE_SUM:
+    if payload is None:
         return out
 
-    out["spike_fraction_in_active_envelope"] = np.nansum(spike_weights[active_mask]) / total_spike
-    out["spike_fraction_within_buffer"] = np.nansum(spike_weights[buffer_mask]) / total_spike
-    out["mean_nearest_distance_deg"] = np.nansum(spike_weights * nearest_distance) / total_spike
+    out["spike_fraction_in_active_envelope"] = float(payload["inside_fraction"])
+    out["spike_fraction_within_buffer"] = float(payload["within_buffer_fraction"])
+    out["mean_nearest_distance_deg"] = float(payload["mean_distance_deg"])
 
     if out["active_area_fraction"] > 0:
         out["active_enrichment"] = (
@@ -283,6 +350,162 @@ def build_metrics(
             "spike_threshold": SPIKE_THRESHOLD,
             "lag_window_days": LAG_WINDOW_DAYS,
             "description": "Derived metrics for phase locking between OLR and spikes.",
+        },
+    )
+
+
+def build_distance_panel_data(
+    olr: xr.DataArray,
+    spike: xr.DataArray,
+    lag_days: xr.DataArray,
+    olr_threshold: float,
+    n_perm: int,
+) -> xr.Dataset:
+    lon = olr["lon"].values.astype(float)
+    analysis_mask = analysis_mask_from_lag(lag_days)
+    distance_grid = np.arange(
+        0.0,
+        DISTANCE_CURVE_MAX_DEG + DISTANCE_CURVE_STEP_DEG,
+        DISTANCE_CURVE_STEP_DEG,
+        dtype=float,
+    )
+    rng = np.random.default_rng(42)
+
+    observed_distances = []
+    observed_weights = []
+    n_lags_used = 0
+
+    for i in range(olr.sizes["time"]):
+        if not analysis_mask[i]:
+            continue
+
+        payload = collect_distance_sample(
+            olr.isel(time=i).values.astype(float),
+            spike.isel(time=i).values.astype(float),
+            lon,
+            olr_threshold,
+        )
+        if payload is None:
+            continue
+
+        observed_distances.append(np.asarray(payload["distances"], dtype=float))
+        observed_weights.append(np.asarray(payload["weights"], dtype=float))
+        n_lags_used += 1
+
+    if not observed_distances:
+        return xr.Dataset(
+            data_vars={
+                "observed_cdf": ("distance_deg", np.full(distance_grid.shape, np.nan, dtype=float)),
+                "null_cdf_mean": ("distance_deg", np.full(distance_grid.shape, np.nan, dtype=float)),
+                "null_cdf_lower": ("distance_deg", np.full(distance_grid.shape, np.nan, dtype=float)),
+                "null_cdf_upper": ("distance_deg", np.full(distance_grid.shape, np.nan, dtype=float)),
+            },
+            coords={"distance_deg": distance_grid},
+            attrs={
+                "analysis_lags_used": 0,
+                "inside_fraction": np.nan,
+                "within_10deg_fraction": np.nan,
+                "mean_distance_deg": np.nan,
+                "median_distance_deg": np.nan,
+                "p_inside_fraction": np.nan,
+                "p_within_10deg_fraction": np.nan,
+                "p_mean_distance": np.nan,
+                "n_perm": n_perm,
+            },
+        )
+
+    observed_distances = np.concatenate(observed_distances)
+    observed_weights = np.concatenate(observed_weights)
+    observed_cdf = weighted_cdf(observed_distances, observed_weights, distance_grid)
+    observed_inside = float(weighted_cdf(observed_distances, observed_weights, np.array([0.0]))[0])
+    observed_within_10 = float(
+        weighted_cdf(observed_distances, observed_weights, np.array([ENVELOPE_HALF_WIDTH_DEG]))[0]
+    )
+    observed_mean_distance = float(
+        np.nansum(observed_weights * observed_distances) / np.nansum(observed_weights)
+    )
+    observed_median_distance = weighted_median(observed_distances, observed_weights)
+
+    null_curves = []
+    null_inside = []
+    null_within_10 = []
+    null_mean_distance = []
+
+    for _ in range(n_perm):
+        perm_distances = []
+        perm_weights = []
+
+        for i in range(olr.sizes["time"]):
+            if not analysis_mask[i]:
+                continue
+
+            olr_row = olr.isel(time=i).values.astype(float)
+            spike_row = spike.isel(time=i).values.astype(float)
+            shifted_spike = np.roll(spike_row, int(rng.integers(0, lon.size)))
+            payload = collect_distance_sample(olr_row, shifted_spike, lon, olr_threshold)
+            if payload is None:
+                continue
+
+            perm_distances.append(np.asarray(payload["distances"], dtype=float))
+            perm_weights.append(np.asarray(payload["weights"], dtype=float))
+
+        if not perm_distances:
+            continue
+
+        perm_distances = np.concatenate(perm_distances)
+        perm_weights = np.concatenate(perm_weights)
+        perm_curve = weighted_cdf(perm_distances, perm_weights, distance_grid)
+        null_curves.append(perm_curve)
+        null_inside.append(float(weighted_cdf(perm_distances, perm_weights, np.array([0.0]))[0]))
+        null_within_10.append(
+            float(weighted_cdf(perm_distances, perm_weights, np.array([ENVELOPE_HALF_WIDTH_DEG]))[0])
+        )
+        null_mean_distance.append(
+            float(np.nansum(perm_weights * perm_distances) / np.nansum(perm_weights))
+        )
+
+    if null_curves:
+        null_curves = np.asarray(null_curves, dtype=float)
+        null_cdf_mean = np.nanmean(null_curves, axis=0)
+        null_cdf_lower = np.nanpercentile(null_curves, 5.0, axis=0)
+        null_cdf_upper = np.nanpercentile(null_curves, 95.0, axis=0)
+        null_inside = np.asarray(null_inside, dtype=float)
+        null_within_10 = np.asarray(null_within_10, dtype=float)
+        null_mean_distance = np.asarray(null_mean_distance, dtype=float)
+        p_inside = float((np.sum(null_inside >= observed_inside) + 1.0) / (null_inside.size + 1.0))
+        p_within_10 = float(
+            (np.sum(null_within_10 >= observed_within_10) + 1.0) / (null_within_10.size + 1.0)
+        )
+        p_mean_distance = float(
+            (np.sum(null_mean_distance <= observed_mean_distance) + 1.0)
+            / (null_mean_distance.size + 1.0)
+        )
+    else:
+        null_cdf_mean = np.full(distance_grid.shape, np.nan, dtype=float)
+        null_cdf_lower = np.full(distance_grid.shape, np.nan, dtype=float)
+        null_cdf_upper = np.full(distance_grid.shape, np.nan, dtype=float)
+        p_inside = np.nan
+        p_within_10 = np.nan
+        p_mean_distance = np.nan
+
+    return xr.Dataset(
+        data_vars={
+            "observed_cdf": ("distance_deg", observed_cdf),
+            "null_cdf_mean": ("distance_deg", null_cdf_mean),
+            "null_cdf_lower": ("distance_deg", null_cdf_lower),
+            "null_cdf_upper": ("distance_deg", null_cdf_upper),
+        },
+        coords={"distance_deg": distance_grid},
+        attrs={
+            "analysis_lags_used": int(n_lags_used),
+            "inside_fraction": observed_inside,
+            "within_10deg_fraction": observed_within_10,
+            "mean_distance_deg": observed_mean_distance,
+            "median_distance_deg": observed_median_distance,
+            "p_inside_fraction": p_inside,
+            "p_within_10deg_fraction": p_within_10,
+            "p_mean_distance": p_mean_distance,
+            "n_perm": n_perm,
         },
     )
 
@@ -408,18 +631,11 @@ def make_plot(
     spike: xr.DataArray,
     lag_days: xr.DataArray,
     metrics: xr.Dataset,
+    panel_data: xr.Dataset,
     output_path: Path,
     label: str,
     olr_threshold: float,
 ) -> None:
-    full_lag = lag_days.values.astype(float)
-    plot_mask = np.isfinite(full_lag) & (np.abs(full_lag) <= LAG_WINDOW_DAYS)
-    plot_times = lag_days["time"].values[plot_mask]
-
-    lag_win = lag_days.sel(time=plot_times)
-    metrics_win = metrics.sel(time=plot_times)
-
-    lag = lag_win.values.astype(float)
     fig = plt.figure(figsize=(11.5, 8.5))
 
     ax1 = fig.add_subplot(2, 1, 1)
@@ -485,34 +701,66 @@ def make_plot(
     fig.colorbar(cf, ax=ax1, pad=0.01, label="OLR anomaly")
 
     ax2 = fig.add_subplot(2, 1, 2)
-    ax2.axvline(0.0, color="0.6", lw=1.0, ls="--")
+    distance = panel_data["distance_deg"].values.astype(float)
+    observed_cdf = panel_data["observed_cdf"].values.astype(float)
+    null_cdf_mean = panel_data["null_cdf_mean"].values.astype(float)
+    null_cdf_lower = panel_data["null_cdf_lower"].values.astype(float)
+    null_cdf_upper = panel_data["null_cdf_upper"].values.astype(float)
+
+    if np.isfinite(null_cdf_lower).any() and np.isfinite(null_cdf_upper).any():
+        ax2.fill_between(
+            distance,
+            null_cdf_lower,
+            null_cdf_upper,
+            color="0.8",
+            alpha=0.4,
+            label="Random-shift null (5-95%)",
+        )
     ax2.plot(
-        lag,
-        metrics_win["spike_fraction_in_active_envelope"],
+        distance,
+        null_cdf_mean,
+        color="0.35",
+        lw=2.0,
+        ls="--",
+        label="Random-shift null mean",
+    )
+    ax2.plot(
+        distance,
+        observed_cdf,
         color="tab:red",
-        lw=2.5,
-        label="Spike fraction inside active envelope",
+        lw=2.8,
+        label="Observed cumulative spike mass",
     )
-    ax2.set_ylabel("Spike mass fraction")
-    ax2.set_xlabel("Lag / lead days")
+    ax2.axvline(ENVELOPE_HALF_WIDTH_DEG, color="tab:blue", lw=1.2, ls=":")
+    ax2.set_xlim(0.0, distance.max())
+    ax2.set_ylim(0.0, 1.02)
+    ax2.set_ylabel("Cumulative spike-mass fraction")
+    ax2.set_xlabel("Nearest longitude distance to active envelope (deg)")
     ax2.grid(alpha=0.3)
-
-    ax2b = ax2.twinx()
-    ax2b.plot(
-        lag,
-        metrics_win["mean_nearest_distance_deg"],
-        color="tab:purple",
-        lw=2.5,
-        label="Mean nearest distance",
-    )
-    ax2b.set_ylabel("Mean nearest distance (deg)")
-
-    lines1, labels1 = ax2.get_legend_handles_labels()
-    lines2, labels2 = ax2b.get_legend_handles_labels()
-    ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper left", frameon=True)
+    ax2.legend(loc="lower right", frameon=True)
     ax2.set_title(
-        f"Spike-envelope overlap and distance within +/-{int(LAG_WINDOW_DAYS)} days",
+        f"Spike proximity to active OLR envelope aggregated over +/-{int(LAG_WINDOW_DAYS)} days",
         fontweight="bold",
+    )
+
+    info_text = (
+        f"Inside envelope: {panel_data.attrs['inside_fraction']:.2f}"
+        f" (p={panel_data.attrs['p_inside_fraction']:.3f})\n"
+        f"Within 10°: {panel_data.attrs['within_10deg_fraction']:.2f}"
+        f" (p={panel_data.attrs['p_within_10deg_fraction']:.3f})\n"
+        f"Mean nearest distance: {panel_data.attrs['mean_distance_deg']:.2f}°"
+        f" (p={panel_data.attrs['p_mean_distance']:.3f})\n"
+        f"Window: |lag| <= {int(LAG_WINDOW_DAYS)} days, excluding day 0"
+    )
+    ax2.text(
+        0.02,
+        0.98,
+        info_text,
+        transform=ax2.transAxes,
+        ha="left",
+        va="top",
+        fontsize=10.0,
+        bbox={"boxstyle": "round", "facecolor": "white", "edgecolor": "0.7", "alpha": 0.9},
     )
 
     fig.tight_layout()
@@ -521,7 +769,13 @@ def make_plot(
     plt.close(fig)
 
 
-def write_summary(metrics: xr.Dataset, significance: xr.Dataset, output_path: Path, label: str) -> None:
+def write_summary(
+    metrics: xr.Dataset,
+    significance: xr.Dataset,
+    panel_data: xr.Dataset,
+    output_path: Path,
+    label: str,
+) -> None:
     lag = metrics["lag_days"].values.astype(float)
     active_enrich = metrics["active_enrichment"].values.astype(float)
     buffer_enrich = metrics["buffer_enrichment"].values.astype(float)
@@ -594,11 +848,18 @@ def write_summary(metrics: xr.Dataset, significance: xr.Dataset, output_path: Pa
         f"Lags with p < 0.05 for spike fraction inside active envelope: {sig_active_count}/{int(analysis_mask.sum())}",
         f"Lags with p < 0.05 for mean nearest distance: {sig_distance_count}/{int(analysis_mask.sum())}",
         "",
+        "Panel-B aggregate diagnostics:",
+        f"- Cumulative spike-mass curve is aggregated over all analysis lags with |lag| <= {LAG_WINDOW_DAYS:.0f} days, excluding lag 0.",
+        f"- Aggregate inside-envelope fraction: {panel_data.attrs['inside_fraction']:.3f} (p={panel_data.attrs['p_inside_fraction']:.4f})",
+        f"- Aggregate within +/-{ENVELOPE_HALF_WIDTH_DEG:.0f} deg fraction: {panel_data.attrs['within_10deg_fraction']:.3f} (p={panel_data.attrs['p_within_10deg_fraction']:.4f})",
+        f"- Aggregate mean nearest distance: {panel_data.attrs['mean_distance_deg']:.2f} deg (p={panel_data.attrs['p_mean_distance']:.4f})",
+        "",
         "Metric definitions:",
         "- Active envelope = longitudes where OLR is below the negative threshold.",
         "- Spike fraction inside active envelope = sum of spike mass at longitudes with OLR <= threshold, divided by total spike mass at that lag.",
         f"- Mean nearest distance = spike-weighted mean longitude distance to the nearest active-envelope longitude.",
         "- Active-envelope enrichment = [spike fraction inside active envelope] / [fraction of longitudes inside the active envelope].",
+        f"- Panel B plots the cumulative fraction of spike mass within a given nearest longitude distance from the active OLR envelope.",
         "- Positive spatial correlation means spike maxima align with negative OLR anomalies across longitude.",
         "",
         "Statistical significance:",
@@ -638,21 +899,32 @@ def main() -> None:
         olr_threshold=args.olr_threshold,
         n_perm=args.n_perm,
     )
+    panel_data = build_distance_panel_data(
+        olr=olr,
+        spike=spike,
+        lag_days=lag_days,
+        olr_threshold=args.olr_threshold,
+        n_perm=args.n_perm,
+    )
 
     metrics_out = metrics.copy()
     for name, data_array in significance.data_vars.items():
         metrics_out[name] = data_array
+    for name, data_array in panel_data.data_vars.items():
+        metrics_out[name] = data_array
     metrics_out.attrs.update(significance.attrs)
+    metrics_out.attrs.update({f"panel_{k}": v for k, v in panel_data.attrs.items()})
 
     args.metrics.parent.mkdir(parents=True, exist_ok=True)
     metrics_out.to_netcdf(args.metrics)
 
-    write_summary(metrics, significance, args.summary, args.label)
+    write_summary(metrics, significance, panel_data, args.summary, args.label)
     make_plot(
         olr=olr,
         spike=spike,
         lag_days=lag_days,
         metrics=metrics,
+        panel_data=panel_data,
         output_path=args.plot,
         label=args.label,
         olr_threshold=args.olr_threshold,
