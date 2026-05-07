@@ -25,11 +25,12 @@ BOOTSTRAP_SAMPLES = 20000
 RNG_SEED = 42
 ENSEMBLE_EQUIVALENT_FACTOR = 10
 ROBUST_TRIM_FRACTION = 0.20
+SECONDS_PER_DAY = 86400.0
 
-CACHE_DIR = Path(__file__).with_name("cache_multi_spike_v1")
-EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_budget_events.csv")
-SUMMARY_PATH = Path(__file__).with_name("multi_spike_budget_summary.csv")
-REGION_SUMMARY_PATH = Path(__file__).with_name("multi_spike_budget_region_summary.csv")
+CACHE_DIR = Path(__file__).with_name("cache_multi_moisture_v1")
+EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_moisture_budget_events.csv")
+SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_summary.csv")
+REGION_SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_region_summary.csv")
 FIGURE_PATH = Path(__file__).with_name("multi_spike_budget_stats.png")
 
 REGIONS = [
@@ -42,12 +43,17 @@ REGIONS = [
 ]
 PACIFIC_REGION_KEYS = {"wtp", "ctp", "etp"}
 
+PROG_REQUIRED_VARS = ("T", "QV")
+PROG_OPTIONAL_VARS = mb.PROG_OPTIONAL_VARS
+SURF_REQUIRED_VARS = ("PS", "LHFX")
+SURF_OPTIONAL_VARS = ("PRECTOT", "TPREC", "precip")
+
 COMPONENTS = [
-    ("precip_jm2", r"$\int L_vP\,dt$"),
-    ("evap_jm2", r"$\int E\,dt$"),
-    ("conv_jm2", r"$\int MC\,dt$"),
-    ("storage_jm2", r"$-\Delta\langle L_vq \rangle$"),
-    ("closed_jm2", "Closed"),
+    ("precip_mm", r"$\int P\,dt$"),
+    ("evap_mm", r"$\int E\,dt$"),
+    ("conv_mm", r"$\int MC\,dt$"),
+    ("storage_mm", r"$-\Delta W$"),
+    ("closed_mm", "Closed"),
 ]
 
 
@@ -86,7 +92,7 @@ def sel_region_with_fallback(ds, lat_rng, lon_rng):
 
 def make_preprocess_prog(lat_rng, lon_rng):
     def preprocess(ds):
-        ds = mb.subset_vars(ds, mb.PROG_REQUIRED_VARS, mb.PROG_OPTIONAL_VARS, "prog")
+        ds = mb.subset_vars(ds, PROG_REQUIRED_VARS, PROG_OPTIONAL_VARS, "prog")
         return sel_region_with_fallback(ds, lat_rng, lon_rng)
 
     return preprocess
@@ -94,7 +100,7 @@ def make_preprocess_prog(lat_rng, lon_rng):
 
 def make_preprocess_surf(lat_rng, lon_rng):
     def preprocess(ds):
-        ds = mb.subset_vars(ds, mb.SURF_REQUIRED_VARS, mb.SURF_OPTIONAL_VARS, "surf")
+        ds = mb.subset_vars(ds, SURF_REQUIRED_VARS, SURF_OPTIONAL_VARS, "surf")
         return sel_region_with_fallback(ds, lat_rng, lon_rng)
 
     return preprocess
@@ -171,78 +177,33 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
     p_mid_vals = ds[lev_dim].values
     if lev_is_hpa:
         p_mid_vals = p_mid_vals * 100.0
-    p_mid_4d = xr.DataArray(p_mid_vals, dims=(lev_dim,)).broadcast_like(ds["T"])
+    p_mid_4d = xr.DataArray(p_mid_vals, dims=(lev_dim,)).broadcast_like(ds["QV"])
     below_ground = p_mid_4d > ds["PS"]
 
-    T = ds["T"].where(~below_ground)
     q = ds["QV"].where(~below_ground)
-    Phi = mb.g * ds["H"].where(~below_ground)
 
-    q_lat = mb.Lv * q
-    col_L = (q_lat * dp / mb.g).sum(lev_dim, skipna=True)
-    s_dry = mb.cp * T + Phi
-    col_s = (s_dry * dp / mb.g).sum(lev_dim, skipna=True)
-    col_h = col_s + col_L
+    col_W = (q * dp / mb.g).sum(lev_dim, skipna=True)
+    dWdt = col_W.differentiate("time", datetime_unit="s")
 
-    dMSEdt = col_h.differentiate("time", datetime_unit="s")
-    dDSEdt = col_s.differentiate("time", datetime_unit="s")
-    dLatentdt = col_L.differentiate("time", datetime_unit="s")
-
-    SWTNET = ds["SWTNET"]
-    OLR = ds["OLR"]
-    SWGNET = ds["SWGNET"]
-    LWS_dn = ds["LWS"]
-
-    lwup_names = [n for n in ("LWUP", "LWUP_SFC", "LWGUP", "LWSUP", "LWGEM") if n in ds.variables]
-    if lwup_names:
-        LWUP_sfc = ds[lwup_names[0]]
-    else:
-        Tsurf = mb.find_surface_temp(ds, ds)
-        LWUP_sfc = mb.sigma * Tsurf**4
-
-    LW_net_sfc = LWS_dn - LWUP_sfc
-    SW_net_sfc = SWGNET
-    R_net_sfc = SW_net_sfc + LW_net_sfc
-    R_net_toa = SWTNET - OLR
-    R_col = R_net_toa - R_net_sfc
-
-    LHF = mb.ensure_atm_positive(ds["LHFX"])
-    SHF = mb.ensure_atm_positive(ds["SHFX"])
+    Evap = mb.ensure_atm_positive(ds["LHFX"]) / mb.Lv
 
     precip_var = [n for n in ("PRECTOT", "TPREC", "precip") if n in ds.variables]
     if precip_var:
-        Precip = ds[precip_var[0]] * mb.Lv
+        Precip = ds[precip_var[0]]
     else:
-        Precip = xr.zeros_like(R_col)
+        Precip = xr.zeros_like(Evap)
         print(f"  WARNING: precipitation variable not found for {name} {region['title']}.")
 
-    DSE_forcing = R_col + SHF + Precip
-    Latent_forcing = LHF - Precip
-    DSE_export = DSE_forcing - dDSEdt
-    Latent_export = Latent_forcing - dLatentdt
-    Hnet = R_col + LHF + SHF
-    MSE_export = Hnet - dMSEdt
-
-    MoistureConvergence = -Latent_export
-    StorageRelease = -dLatentdt
-    PrecipClosed = LHF + MoistureConvergence + StorageRelease
+    StorageRelease = -dWdt
+    MoistureConvergence = Precip - Evap - StorageRelease
+    PrecipClosed = Evap + MoistureConvergence + StorageRelease
     PrecipResidual = Precip - PrecipClosed
 
     fields = {
-        "dMSEdt": dMSEdt,
-        "dDSEdt": dDSEdt,
-        "dLatentdt": dLatentdt,
-        "col_L": col_L,
-        "col_s": col_s,
-        "col_h": col_h,
-        "R_col": R_col,
-        "LHF": LHF,
-        "SHF": SHF,
-        "Hnet": Hnet,
+        "dWdt": dWdt,
+        "col_W": col_W,
         "Precip": Precip,
-        "DSE_export": DSE_export,
-        "Latent_export": Latent_export,
-        "MSE_export": MSE_export,
+        "Evap": Evap,
         "MoistureConvergence": MoistureConvergence,
         "StorageRelease": StorageRelease,
         "PrecipClosed": PrecipClosed,
@@ -308,11 +269,57 @@ def sample_sem(values):
     return float(np.nanstd(values, ddof=1) / np.sqrt(n))
 
 
+def build_event_moisture_series(ds, smooth_hours=BUDGET_SMOOTH_HOURS):
+    steps = mb.smooth_steps_from_hours(ds, smooth_hours)
+    out = xr.Dataset(attrs=dict(ds.attrs))
+    out.attrs["event_smooth_hours"] = float(smooth_hours)
+    out.attrs["event_smooth_steps"] = int(steps)
+
+    out["Precip"] = mb.rolling_event_mean(ds["Precip"], steps)
+    out["Evap"] = mb.rolling_event_mean(ds["Evap"], steps)
+    out["col_W"] = mb.rolling_event_mean(ds["col_W"], steps)
+    out["StorageRelease"] = -out["col_W"].differentiate("time", datetime_unit="s")
+    out["MoistureConvergence"] = out["Precip"] - out["Evap"] - out["StorageRelease"]
+    out["PrecipClosed"] = out["Evap"] + out["MoistureConvergence"] + out["StorageRelease"]
+    out["PrecipResidual"] = out["Precip"] - out["PrecipClosed"]
+    return out
+
+
+def build_event_moisture_table(series, spike_indices, window_hours=EVENT_WINDOW_HOURS):
+    half_steps = mb.half_window_steps_from_hours(series, window_hours)
+
+    rows = []
+    for spike_id, idx in enumerate(spike_indices, start=1):
+        i0 = max(idx - half_steps, 0)
+        i1 = min(idx + half_steps, series.sizes["time"] - 1)
+        window = series.isel(time=slice(i0, i1 + 1))
+
+        precip_int = mb.integrate_flux_window(window["Precip"])
+        evap_int = mb.integrate_flux_window(window["Evap"])
+        conv_int = mb.integrate_flux_window(window["MoistureConvergence"])
+        storage_int = -(float(series["col_W"].isel(time=i1)) - float(series["col_W"].isel(time=i0)))
+        closed_int = evap_int + conv_int + storage_int
+        rows.append(
+            {
+                "spike": f"S{spike_id}",
+                "time": window.time.isel(time=idx - i0).values,
+                "precip_mm": precip_int,
+                "evap_mm": evap_int,
+                "storage_mm": storage_int,
+                "conv_mm": conv_int,
+                "closed_mm": closed_int,
+                "residual_mm": precip_int - closed_int,
+            }
+        )
+
+    return rows, half_steps
+
+
 def collect_region_events(region, me_series, rp_series):
-    me_detect = mb.build_event_budget_series(me_series, smooth_hours=PRECIP_SMOOTH_HOURS)
-    rp_detect = mb.build_event_budget_series(rp_series, smooth_hours=PRECIP_SMOOTH_HOURS)
-    me_budget = mb.build_event_budget_series(me_series, smooth_hours=BUDGET_SMOOTH_HOURS)
-    rp_budget = mb.build_event_budget_series(rp_series, smooth_hours=BUDGET_SMOOTH_HOURS)
+    me_detect = build_event_moisture_series(me_series, smooth_hours=PRECIP_SMOOTH_HOURS)
+    rp_detect = build_event_moisture_series(rp_series, smooth_hours=PRECIP_SMOOTH_HOURS)
+    me_budget = build_event_moisture_series(me_series, smooth_hours=BUDGET_SMOOTH_HOURS)
+    rp_budget = build_event_moisture_series(rp_series, smooth_hours=BUDGET_SMOOTH_HOURS)
 
     reference_precip = xr.where(
         me_detect["Precip"] >= rp_detect["Precip"],
@@ -328,8 +335,8 @@ def collect_region_events(region, me_series, rp_series):
         max_spikes=MAX_SPIKES_PER_REGION,
     )
 
-    me_events, half_steps = mb.build_event_budget_table(me_budget, spike_idx, window_hours=EVENT_WINDOW_HOURS)
-    rp_events, _ = mb.build_event_budget_table(rp_budget, spike_idx, window_hours=EVENT_WINDOW_HOURS)
+    me_events, half_steps = build_event_moisture_table(me_budget, spike_idx, window_hours=EVENT_WINDOW_HOURS)
+    rp_events, _ = build_event_moisture_table(rp_budget, spike_idx, window_hours=EVENT_WINDOW_HOURS)
 
     rows = []
     for event_number, idx, me_event, rp_event in zip(range(1, len(spike_idx) + 1), spike_idx, me_events, rp_events):
@@ -344,23 +351,23 @@ def collect_region_events(region, me_series, rp_series):
             "peak_time": np.datetime_as_string(me_detect.time.isel(time=idx).values, unit="h"),
             "event_start": np.datetime_as_string(event_start, unit="h"),
             "event_end": np.datetime_as_string(event_end, unit="h"),
-            "threshold_wm2": float(threshold),
-            "reference_peak_wm2": float(reference_precip.isel(time=idx)),
-            "rean_peak_wm2": float(me_detect["Precip"].isel(time=idx)),
-            "iau_peak_wm2": float(rp_detect["Precip"].isel(time=idx)),
+            "threshold_mm_day": float(threshold * SECONDS_PER_DAY),
+            "reference_peak_mm_day": float(reference_precip.isel(time=idx) * SECONDS_PER_DAY),
+            "rean_peak_mm_day": float(me_detect["Precip"].isel(time=idx) * SECONDS_PER_DAY),
+            "iau_peak_mm_day": float(rp_detect["Precip"].isel(time=idx) * SECONDS_PER_DAY),
         }
         for key, _ in COMPONENTS:
             record[f"rean_{key}"] = float(me_event[key])
             record[f"iau_{key}"] = float(rp_event[key])
             record[f"diff_{key}"] = float(me_event[key] - rp_event[key])
-        record["rean_residual_jm2"] = float(me_event["residual_jm2"])
-        record["iau_residual_jm2"] = float(rp_event["residual_jm2"])
-        record["diff_residual_jm2"] = float(me_event["residual_jm2"] - rp_event["residual_jm2"])
+        record["rean_residual_mm"] = float(me_event["residual_mm"])
+        record["iau_residual_mm"] = float(rp_event["residual_mm"])
+        record["diff_residual_mm"] = float(me_event["residual_mm"] - rp_event["residual_mm"])
         rows.append(record)
 
     print(
         f"  -> {region['title']}: detected {len(rows)} spikes above the {SPIKE_QUANTILE:.2f} quantile "
-        f"(threshold {threshold:.2f} W m-2)"
+        f"(threshold {threshold * SECONDS_PER_DAY:.2f} mm day-1)"
     )
     return rows
 
@@ -380,7 +387,7 @@ def load_event_rows(path):
         for row in reader:
             parsed = dict(row)
             for key, value in row.items():
-                if key.endswith("_wm2") or key.endswith("_jm2"):
+                if key.endswith("_mm") or key.endswith("_mm_day"):
                     parsed[key] = float(value)
             rows.append(parsed)
     return rows
@@ -389,21 +396,21 @@ def load_event_rows(path):
 def summarize_components(rows, region_name=None):
     summary = []
     for key, label in COMPONENTS:
-        me_vals = np.array([row[f"rean_{key}"] for row in rows], dtype=float) * 1.0e-6
-        rp_vals = np.array([row[f"iau_{key}"] for row in rows], dtype=float) * 1.0e-6
-        diff_vals = np.array([row[f"diff_{key}"] for row in rows], dtype=float) * 1.0e-6
+        me_vals = np.array([row[f"rean_{key}"] for row in rows], dtype=float)
+        rp_vals = np.array([row[f"iau_{key}"] for row in rows], dtype=float)
+        diff_vals = np.array([row[f"diff_{key}"] for row in rows], dtype=float)
         summary.append(
             {
                 "region_name": region_name or "ALL",
                 "component_key": key,
                 "component_label": label,
                 "n_events": int(len(diff_vals)),
-                "rean_mean_mj": float(np.nanmean(me_vals)),
-                "rean_sem_mj": sample_sem(me_vals),
-                "iau_mean_mj": float(np.nanmean(rp_vals)),
-                "iau_sem_mj": sample_sem(rp_vals),
-                "diff_mean_mj": float(np.nanmean(diff_vals)),
-                "diff_sem_mj": sample_sem(diff_vals),
+                "rean_mean_mm": float(np.nanmean(me_vals)),
+                "rean_sem_mm": sample_sem(me_vals),
+                "iau_mean_mm": float(np.nanmean(rp_vals)),
+                "iau_sem_mm": sample_sem(rp_vals),
+                "diff_mean_mm": float(np.nanmean(diff_vals)),
+                "diff_sem_mm": sample_sem(diff_vals),
                 "pvalue": paired_wilcoxon_pvalue(diff_vals),
             }
         )
@@ -413,19 +420,19 @@ def summarize_components(rows, region_name=None):
 def plot_summary(pacific_rows, pacific_summary):
     labels = [label for _, label in COMPONENTS]
 
-    mean_rean = np.array([row["rean_mean_mj"] for row in pacific_summary], dtype=float)
-    mean_iau = np.array([row["iau_mean_mj"] for row in pacific_summary], dtype=float)
+    mean_rean = np.array([row["rean_mean_mm"] for row in pacific_summary], dtype=float)
+    mean_iau = np.array([row["iau_mean_mm"] for row in pacific_summary], dtype=float)
 
     rean_yerr = np.vstack(
         [
-            np.array([row["rean_sem_mj"] for row in pacific_summary], dtype=float),
-            np.array([row["rean_sem_mj"] for row in pacific_summary], dtype=float),
+            np.array([row["rean_sem_mm"] for row in pacific_summary], dtype=float),
+            np.array([row["rean_sem_mm"] for row in pacific_summary], dtype=float),
         ]
     )
     iau_yerr = np.vstack(
         [
-            np.array([row["iau_sem_mj"] for row in pacific_summary], dtype=float),
-            np.array([row["iau_sem_mj"] for row in pacific_summary], dtype=float),
+            np.array([row["iau_sem_mm"] for row in pacific_summary], dtype=float),
+            np.array([row["iau_sem_mm"] for row in pacific_summary], dtype=float),
         ]
     )
 
@@ -443,16 +450,16 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("MJ m$^{-2}$")
+    ax.set_ylabel("mm")
     ax.set_title("(a) Mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
 
     ax = axes[1]
-    pacific_mean_diff = np.array([row["diff_mean_mj"] for row in pacific_summary], dtype=float)
+    pacific_mean_diff = np.array([row["diff_mean_mm"] for row in pacific_summary], dtype=float)
     pacific_diff_yerr = np.vstack(
         [
-            np.array([row["diff_sem_mj"] for row in pacific_summary], dtype=float),
-            np.array([row["diff_sem_mj"] for row in pacific_summary], dtype=float),
+            np.array([row["diff_sem_mm"] for row in pacific_summary], dtype=float),
+            np.array([row["diff_sem_mm"] for row in pacific_summary], dtype=float),
         ]
     )
     bars = ax.bar(x, pacific_mean_diff, width=width, color=colors, alpha=0.88, yerr=pacific_diff_yerr, capsize=4)
@@ -462,14 +469,18 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Ensemble mean difference\n(Dynamically Imbalanced - Dynamically Balanced)\n[MJ m$^{-2}$]")
+    ax.set_ylabel("Ensemble mean difference\n(Dynamically Imbalanced - Dynamically Balanced)\n[mm]")
     ax.set_title("(b) Ensemble mean difference", loc="left", fontweight="bold", fontsize=12)
+    label_scale = np.abs(pacific_mean_diff) + pacific_diff_yerr.max(axis=0)
+    label_pad = 0.5
+    if np.isfinite(label_scale).any():
+        label_pad = max(label_pad, 0.04 * np.nanmax(label_scale))
     for xpos, row, value in zip(x, pacific_summary, pacific_mean_diff):
         if value >= 0.0:
-            yloc = value + pacific_diff_yerr[1, xpos] + 2.0
+            yloc = value + pacific_diff_yerr[1, xpos] + label_pad
             va = "bottom"
         else:
-            yloc = value - pacific_diff_yerr[0, xpos] - 2.0
+            yloc = value - pacific_diff_yerr[0, xpos] - label_pad
             va = "top"
         ax.text(
             xpos,
@@ -495,9 +506,9 @@ def print_component_summary(summary):
     for row in summary:
         print(
             f"  {row['component_label']}: "
-            f"Reanalysis={row['rean_mean_mj']:6.2f} +/- {row['rean_sem_mj']:6.2f}, "
-            f"IAU={row['iau_mean_mj']:6.2f} +/- {row['iau_sem_mj']:6.2f}, "
-            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_sem_mj']:6.2f}, "
+            f"Reanalysis={row['rean_mean_mm']:6.2f} +/- {row['rean_sem_mm']:6.2f}, "
+            f"IAU={row['iau_mean_mm']:6.2f} +/- {row['iau_sem_mm']:6.2f}, "
+            f"diff={row['diff_mean_mm']:6.2f} +/- {row['diff_sem_mm']:6.2f}, "
             f"p={row['pvalue']:.4f}"
         )
 
@@ -527,15 +538,15 @@ def main():
             "peak_time",
             "event_start",
             "event_end",
-            "threshold_wm2",
-            "reference_peak_wm2",
-            "rean_peak_wm2",
-            "iau_peak_wm2",
+            "threshold_mm_day",
+            "reference_peak_mm_day",
+            "rean_peak_mm_day",
+            "iau_peak_mm_day",
         ]
         for prefix in ("rean", "iau", "diff"):
             for key, _ in COMPONENTS:
                 event_fields.append(f"{prefix}_{key}")
-        event_fields.extend(["rean_residual_jm2", "iau_residual_jm2", "diff_residual_jm2"])
+        event_fields.extend(["rean_residual_mm", "iau_residual_mm", "diff_residual_mm"])
         write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
         print(f"Event table saved to {EVENT_TABLE_PATH}")
 
@@ -550,7 +561,7 @@ def main():
     for row in pacific_summary:
         print(
             f"  {row['component_label']}: "
-            f"diff={row['diff_mean_mj']:6.2f} +/- {row['diff_sem_mj']:6.2f}, "
+            f"diff={row['diff_mean_mm']:6.2f} +/- {row['diff_sem_mm']:6.2f}, "
             f"p={row['pvalue']:.4f}"
         )
 
@@ -559,12 +570,12 @@ def main():
         "component_key",
         "component_label",
         "n_events",
-        "rean_mean_mj",
-        "rean_sem_mj",
-        "iau_mean_mj",
-        "iau_sem_mj",
-        "diff_mean_mj",
-        "diff_sem_mj",
+        "rean_mean_mm",
+        "rean_sem_mm",
+        "iau_mean_mm",
+        "iau_sem_mm",
+        "diff_mean_mm",
+        "diff_sem_mm",
         "pvalue",
     ]
     write_csv(SUMMARY_PATH, pacific_summary, summary_fields)
