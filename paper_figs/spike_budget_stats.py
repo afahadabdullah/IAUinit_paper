@@ -53,7 +53,6 @@ COMPONENTS = [
     ("evap_mm", r"$\int E\,dt$"),
     ("conv_mm", r"$\int MC\,dt$"),
     ("storage_mm", r"$-\Delta W$"),
-    ("closed_mm", "Closed"),
 ]
 
 
@@ -196,8 +195,6 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
 
     StorageRelease = -dWdt
     MoistureConvergence = Precip - Evap - StorageRelease
-    PrecipClosed = Evap + MoistureConvergence + StorageRelease
-    PrecipResidual = Precip - PrecipClosed
 
     fields = {
         "dWdt": dWdt,
@@ -206,8 +203,6 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
         "Evap": Evap,
         "MoistureConvergence": MoistureConvergence,
         "StorageRelease": StorageRelease,
-        "PrecipClosed": PrecipClosed,
-        "PrecipResidual": PrecipResidual,
     }
 
     series = mb.make_series_dataset(
@@ -280,8 +275,6 @@ def build_event_moisture_series(ds, smooth_hours=BUDGET_SMOOTH_HOURS):
     out["col_W"] = mb.rolling_event_mean(ds["col_W"], steps)
     out["StorageRelease"] = -out["col_W"].differentiate("time", datetime_unit="s")
     out["MoistureConvergence"] = out["Precip"] - out["Evap"] - out["StorageRelease"]
-    out["PrecipClosed"] = out["Evap"] + out["MoistureConvergence"] + out["StorageRelease"]
-    out["PrecipResidual"] = out["Precip"] - out["PrecipClosed"]
     return out
 
 
@@ -298,7 +291,6 @@ def build_event_moisture_table(series, spike_indices, window_hours=EVENT_WINDOW_
         evap_int = mb.integrate_flux_window(window["Evap"])
         conv_int = mb.integrate_flux_window(window["MoistureConvergence"])
         storage_int = -(float(series["col_W"].isel(time=i1)) - float(series["col_W"].isel(time=i0)))
-        closed_int = evap_int + conv_int + storage_int
         rows.append(
             {
                 "spike": f"S{spike_id}",
@@ -307,8 +299,6 @@ def build_event_moisture_table(series, spike_indices, window_hours=EVENT_WINDOW_
                 "evap_mm": evap_int,
                 "storage_mm": storage_int,
                 "conv_mm": conv_int,
-                "closed_mm": closed_int,
-                "residual_mm": precip_int - closed_int,
             }
         )
 
@@ -360,9 +350,6 @@ def collect_region_events(region, me_series, rp_series):
             record[f"rean_{key}"] = float(me_event[key])
             record[f"iau_{key}"] = float(rp_event[key])
             record[f"diff_{key}"] = float(me_event[key] - rp_event[key])
-        record["rean_residual_mm"] = float(me_event["residual_mm"])
-        record["iau_residual_mm"] = float(rp_event["residual_mm"])
-        record["diff_residual_mm"] = float(me_event["residual_mm"] - rp_event["residual_mm"])
         rows.append(record)
 
     print(
@@ -380,6 +367,25 @@ def write_csv(path, rows, fieldnames):
             writer.writerow(row)
 
 
+def event_fieldnames():
+    fields = [
+        "region_key",
+        "region_name",
+        "event_id",
+        "peak_time",
+        "event_start",
+        "event_end",
+        "threshold_mm_day",
+        "reference_peak_mm_day",
+        "rean_peak_mm_day",
+        "iau_peak_mm_day",
+    ]
+    for prefix in ("rean", "iau", "diff"):
+        for key, _ in COMPONENTS:
+            fields.append(f"{prefix}_{key}")
+    return fields
+
+
 def load_event_rows(path):
     rows = []
     with path.open("r", newline="") as handle:
@@ -391,6 +397,11 @@ def load_event_rows(path):
                     parsed[key] = float(value)
             rows.append(parsed)
     return rows
+
+
+def current_schema_rows(rows):
+    keep = set(event_fieldnames())
+    return [{key: row[key] for key in event_fieldnames() if key in row and key in keep} for row in rows]
 
 
 def summarize_components(rows, region_name=None):
@@ -514,9 +525,11 @@ def print_component_summary(summary):
 
 
 def main():
+    event_fields = event_fieldnames()
     if EVENT_TABLE_PATH.exists():
         print(f"Loading saved spike-event statistics from {EVENT_TABLE_PATH}...")
-        all_rows = load_event_rows(EVENT_TABLE_PATH)
+        all_rows = current_schema_rows(load_event_rows(EVENT_TABLE_PATH))
+        write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
     else:
         me_prog_patterns = monthly_patterns(mb.me_prog)
         me_surf_patterns = monthly_patterns(mb.me_surf)
@@ -531,22 +544,6 @@ def main():
             region_rows = collect_region_events(region, me_series, rp_series)
             all_rows.extend(region_rows)
 
-        event_fields = [
-            "region_key",
-            "region_name",
-            "event_id",
-            "peak_time",
-            "event_start",
-            "event_end",
-            "threshold_mm_day",
-            "reference_peak_mm_day",
-            "rean_peak_mm_day",
-            "iau_peak_mm_day",
-        ]
-        for prefix in ("rean", "iau", "diff"):
-            for key, _ in COMPONENTS:
-                event_fields.append(f"{prefix}_{key}")
-        event_fields.extend(["rean_residual_mm", "iau_residual_mm", "diff_residual_mm"])
         write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
         print(f"Event table saved to {EVENT_TABLE_PATH}")
 
