@@ -28,7 +28,7 @@ ENSEMBLE_EQUIVALENT_FACTOR = 10
 ROBUST_TRIM_FRACTION = 0.20
 SECONDS_PER_DAY = 86400.0
 
-CACHE_DIR = Path(__file__).with_name("cache_multi_moisture_v1")
+CACHE_DIR = Path(__file__).with_name("cache_latest")
 EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_moisture_budget_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_summary.csv")
 REGION_SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_region_summary.csv")
