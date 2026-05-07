@@ -138,7 +138,11 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
     cache_file = CACHE_DIR / f"{name}_{region['key']}.nc"
     if cache_file.exists():
         print(f"Loading {name} {region['title']} from cache...")
-        return xr.open_dataset(cache_file).load()
+        try:
+            return xr.open_dataset(cache_file).load()
+        except Exception as exc:
+            print(f"  WARNING: cache read failed for {cache_file}: {exc}. Recomputing from source files.")
+            cache_file.unlink(missing_ok=True)
 
     lat_rng = region["lat"]
     lon_rng = region["lon"]
@@ -219,7 +223,10 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
             "experiment_name": name,
         },
     )
-    series.to_netcdf(cache_file)
+    tmp_cache_file = cache_file.with_suffix(cache_file.suffix + ".tmp")
+    tmp_cache_file.unlink(missing_ok=True)
+    series.to_netcdf(tmp_cache_file)
+    tmp_cache_file.replace(cache_file)
     return series
 
 
