@@ -488,28 +488,20 @@ def plot_summary(pacific_rows, pacific_summary):
     if np.isfinite(label_scale).any():
         label_pad = max(label_pad, 0.04 * np.nanmax(label_scale))
     y_for_limits = [0.0]
+    pvalue_positions = []
     for xpos, row, value in zip(x, pacific_summary, pacific_mean_diff):
         if value >= 0.0:
-            yloc = value + pacific_diff_yerr[1, xpos] + label_pad
-            va = "bottom"
+            raw_yloc = value + pacific_diff_yerr[1, xpos] + label_pad
         else:
-            yloc = value - pacific_diff_yerr[0, xpos] - label_pad
-            va = "top"
+            raw_yloc = value - pacific_diff_yerr[0, xpos] - label_pad
         y_for_limits.extend(
             [
                 value - pacific_diff_yerr[0, xpos],
                 value + pacific_diff_yerr[1, xpos],
-                yloc,
+                raw_yloc,
             ]
         )
-        ax.text(
-            xpos,
-            yloc,
-            f"p={row['pvalue']:.3f}",
-            ha="center",
-            va=va,
-            fontsize=9,
-        )
+        pvalue_positions.append((xpos, raw_yloc, row["pvalue"]))
 
     finite_y = np.asarray(y_for_limits, dtype=float)
     finite_y = finite_y[np.isfinite(finite_y)]
@@ -517,8 +509,23 @@ def plot_summary(pacific_rows, pacific_summary):
         ymin = float(np.nanmin(finite_y))
         ymax = float(np.nanmax(finite_y))
         yrange = max(ymax - ymin, 1.0)
-        margin = max(0.75, 0.08 * yrange)
-        ax.set_ylim(ymin - margin, ymax + margin)
+        margin = max(1.0, 0.14 * yrange)
+        ylim_low = ymin - margin
+        ylim_high = ymax + margin
+        ax.set_ylim(ylim_low, ylim_high)
+
+        inset = max(0.4, 0.04 * (ylim_high - ylim_low))
+        for xpos, raw_yloc, pvalue in pvalue_positions:
+            yloc = float(np.clip(raw_yloc, ylim_low + inset, ylim_high - inset))
+            ax.text(
+                xpos,
+                yloc,
+                f"p={pvalue:.3f}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                clip_on=True,
+            )
 
     for ax in axes:
         ax.grid(True, linestyle=":", alpha=0.6)
