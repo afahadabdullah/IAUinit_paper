@@ -18,6 +18,7 @@ ANALYSIS_END = "2005-06-30"
 SPIKE_QUANTILE = 0.95
 MIN_PEAK_SEPARATION_HOURS = 24.0
 EVENT_WINDOW_HOURS = 24.0
+EVENT_WINDOW_LABEL = f"{EVENT_WINDOW_HOURS:g}-h spike window"
 PRECIP_SMOOTH_HOURS = 6.0
 BUDGET_SMOOTH_HOURS = 0.0
 MAX_SPIKES_PER_REGION = 999
@@ -461,7 +462,7 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("mm")
+    ax.set_ylabel(f"mm per {EVENT_WINDOW_LABEL}")
     ax.set_title("(a) Mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
 
@@ -480,12 +481,13 @@ def plot_summary(pacific_rows, pacific_summary):
     ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Ensemble mean difference\n(Dynamically Imbalanced - Dynamically Balanced)\n[mm]")
-    ax.set_title("(b) Ensemble mean difference", loc="left", fontweight="bold", fontsize=12)
+    ax.set_ylabel(f"Difference [mm per {EVENT_WINDOW_LABEL}]")
+    ax.set_title("(b) Ensemble mean difference (imbalanced - balanced)", loc="left", fontweight="bold", fontsize=12)
     label_scale = np.abs(pacific_mean_diff) + pacific_diff_yerr.max(axis=0)
     label_pad = 0.5
     if np.isfinite(label_scale).any():
         label_pad = max(label_pad, 0.04 * np.nanmax(label_scale))
+    y_for_limits = [0.0]
     for xpos, row, value in zip(x, pacific_summary, pacific_mean_diff):
         if value >= 0.0:
             yloc = value + pacific_diff_yerr[1, xpos] + label_pad
@@ -493,6 +495,13 @@ def plot_summary(pacific_rows, pacific_summary):
         else:
             yloc = value - pacific_diff_yerr[0, xpos] - label_pad
             va = "top"
+        y_for_limits.extend(
+            [
+                value - pacific_diff_yerr[0, xpos],
+                value + pacific_diff_yerr[1, xpos],
+                yloc,
+            ]
+        )
         ax.text(
             xpos,
             yloc,
@@ -501,6 +510,15 @@ def plot_summary(pacific_rows, pacific_summary):
             va=va,
             fontsize=9,
         )
+
+    finite_y = np.asarray(y_for_limits, dtype=float)
+    finite_y = finite_y[np.isfinite(finite_y)]
+    if finite_y.size:
+        ymin = float(np.nanmin(finite_y))
+        ymax = float(np.nanmax(finite_y))
+        yrange = max(ymax - ymin, 1.0)
+        margin = max(0.75, 0.08 * yrange)
+        ax.set_ylim(ymin - margin, ymax + margin)
 
     for ax in axes:
         ax.grid(True, linestyle=":", alpha=0.6)
