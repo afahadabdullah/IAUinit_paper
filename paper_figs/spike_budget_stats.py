@@ -297,8 +297,8 @@ def build_event_moisture_table(series, spike_indices, window_hours=EVENT_WINDOW_
 
         precip_int = mb.integrate_flux_window(window["Precip"])
         evap_int = mb.integrate_flux_window(window["Evap"])
-        conv_int = mb.integrate_flux_window(window["MoistureConvergence"])
         storage_int = -(float(series["col_W"].isel(time=i1)) - float(series["col_W"].isel(time=i0)))
+        conv_int = precip_int - evap_int - storage_int
         rows.append(
             {
                 "spike": f"S{spike_id}",
@@ -392,24 +392,6 @@ def event_fieldnames():
         for key, _ in COMPONENTS:
             fields.append(f"{prefix}_{key}")
     return fields
-
-
-def load_event_rows(path):
-    rows = []
-    with path.open("r", newline="") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            parsed = dict(row)
-            for key, value in row.items():
-                if key.endswith("_mm") or key.endswith("_mm_day"):
-                    parsed[key] = float(value)
-            rows.append(parsed)
-    return rows
-
-
-def current_schema_rows(rows):
-    keep = set(event_fieldnames())
-    return [{key: row[key] for key in event_fieldnames() if key in row and key in keep} for row in rows]
 
 
 def summarize_components(rows, region_name=None):
@@ -558,26 +540,21 @@ def print_component_summary(summary):
 
 def main():
     event_fields = event_fieldnames()
-    if EVENT_TABLE_PATH.exists():
-        print(f"Loading saved spike-event statistics from {EVENT_TABLE_PATH}...")
-        all_rows = current_schema_rows(load_event_rows(EVENT_TABLE_PATH))
-        write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
-    else:
-        me_prog_patterns = monthly_patterns(mb.me_prog)
-        me_surf_patterns = monthly_patterns(mb.me_surf)
-        rp_prog_patterns = monthly_patterns(mb.rp_prog)
-        rp_surf_patterns = monthly_patterns(mb.rp_surf)
+    me_prog_patterns = monthly_patterns(mb.me_prog)
+    me_surf_patterns = monthly_patterns(mb.me_surf)
+    rp_prog_patterns = monthly_patterns(mb.rp_prog)
+    rp_surf_patterns = monthly_patterns(mb.rp_surf)
 
-        all_rows = []
-        for region in REGIONS:
-            me_series = compute_region_budget_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
-            rp_series = compute_region_budget_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
-            me_series, rp_series = xr.align(me_series, rp_series, join="inner")
-            region_rows = collect_region_events(region, me_series, rp_series)
-            all_rows.extend(region_rows)
+    all_rows = []
+    for region in REGIONS:
+        me_series = compute_region_budget_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
+        rp_series = compute_region_budget_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
+        me_series, rp_series = xr.align(me_series, rp_series, join="inner")
+        region_rows = collect_region_events(region, me_series, rp_series)
+        all_rows.extend(region_rows)
 
-        write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
-        print(f"Event table saved to {EVENT_TABLE_PATH}")
+    write_csv(EVENT_TABLE_PATH, all_rows, event_fields)
+    print(f"Event table saved to {EVENT_TABLE_PATH}")
 
     region_summary_rows = []
     for region in REGIONS:
