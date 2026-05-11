@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute an ensemble-mean Wheeler-Kiladis spectrum for RP 3-hourly precip."""
+"""Compute ensemble-mean Wheeler-Kiladis spectra for 3-hourly precip."""
 
 from __future__ import annotations
 
@@ -19,32 +19,43 @@ import numpy as np
 import xarray as xr
 
 
-DEFAULT_MEMBERS = (
-    "GEOSMIT_RP0416",
-    "GEOSMIT_RP0421",
-    "GEOSMIT_RP0426",
-    "GEOSMIT_RP0506",
-    "GEOSMIT_RP0511",
+DEFAULT_GROUPS = ("ME", "RP")
+DEFAULT_MEMBER_SUFFIXES = (
+    "0416",
+    "0421",
+    "0426",
+    "0506",
+    "0511",
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Treat RP experiments as ensemble members and plot the ensemble-mean "
+            "Treat ME/RP experiments as ensemble members and plot ensemble-mean "
             "WK spectrum from 3-hourly precipitation."
         )
     )
     parser.add_argument(
         "--base-dir",
         default="/nobackupp27/afahad/exp/IAU_exp",
-        help="Directory containing GEOSMIT_RP* experiment directories.",
+        help="Directory containing GEOSMIT_ME* and GEOSMIT_RP* experiment directories.",
+    )
+    parser.add_argument(
+        "--groups",
+        nargs="+",
+        choices=("ME", "RP", "me", "rp"),
+        default=list(DEFAULT_GROUPS),
+        help="Experiment groups to process.",
     )
     parser.add_argument(
         "--members",
         nargs="+",
-        default=list(DEFAULT_MEMBERS),
-        help="Experiment directories to treat as ensemble members.",
+        default=list(DEFAULT_MEMBER_SUFFIXES),
+        help=(
+            "Member suffixes to process, e.g. 0416 0421. Full names like "
+            "GEOSMIT_RP0416 are also accepted and mapped to each requested group."
+        ),
     )
     parser.add_argument(
         "--collection",
@@ -68,8 +79,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-prefix",
+        default=None,
+        help=(
+            "Optional base prefix override. By default RP uses the existing "
+            "wk_rp_precip_ensmean cache name and ME uses wk_me_precip_ensmean."
+        ),
+    )
+    parser.add_argument(
+        "--me-prefix",
+        default="wk_me_precip_ensmean",
+        help="Output prefix for the ME cache and plot.",
+    )
+    parser.add_argument(
+        "--rp-prefix",
         default="wk_rp_precip_ensmean",
-        help="Prefix for output files.",
+        help="Output prefix for the RP cache and plot.",
+    )
+    parser.add_argument(
+        "--comparison-prefix",
+        default="wk_me_rp_precip_ensmean",
+        help="Output prefix for the combined ME/RP/ME-RP plot.",
     )
     parser.add_argument(
         "--lat-bounds",
@@ -175,6 +204,50 @@ def parse_args() -> argparse.Namespace:
         help="Ignore an existing cached NetCDF spectrum and recompute from the source files.",
     )
     return parser.parse_args()
+
+
+def normalized_groups(groups: list[str]) -> list[str]:
+    seen = set()
+    out = []
+    for group in groups:
+        normalized = group.upper()
+        if normalized not in seen:
+            out.append(normalized)
+            seen.add(normalized)
+    return out
+
+
+def group_member_names(group: str, members: list[str]) -> list[str]:
+    names = []
+    for member in members:
+        suffix = member
+        if suffix.startswith("GEOSMIT_"):
+            suffix = suffix.split("_", 1)[1]
+        if suffix.startswith(("ME", "RP")):
+            suffix = suffix[2:]
+        names.append(f"GEOSMIT_{group}{suffix}")
+    return names
+
+
+def output_prefix_for_group(args: argparse.Namespace, group: str) -> str:
+    group_lower = group.lower()
+    base_prefix = args.out_prefix
+    if base_prefix is None:
+        return args.me_prefix if group == "ME" else args.rp_prefix
+    if "{group}" in base_prefix:
+        return base_prefix.format(group=group_lower)
+    if base_prefix.startswith(f"wk_{group_lower}_"):
+        return base_prefix
+    return f"{base_prefix}_{group_lower}"
+
+
+def comparison_prefix(args: argparse.Namespace, groups: list[str]) -> str:
+    if args.comparison_prefix:
+        return args.comparison_prefix
+    lower_groups = [group.lower() for group in groups]
+    if "me" in lower_groups and "rp" in lower_groups:
+        return "wk_me_rp_precip_ensmean"
+    return f"wk_{'_'.join(lower_groups)}_precip_ensmean"
 
 
 def member_files(base_dir: Path, member: str, collection: str, pattern: str) -> list[Path]:
@@ -416,6 +489,31 @@ def add_dispersion_curves(ax: plt.Axes, fmin: float, fmax: float) -> None:
             ax.text(kk[mask][0], ff[mask][0], f"{depth}m", fontsize=8)
 
 
+def plot_values(
+    power: np.ndarray,
+    plot_mode: str,
+    smooth_passes: int,
+) -> tuple[np.ndarray, str, str]:
+    if plot_mode == "normalized":
+        bg = background_spectrum(power, smooth_passes)
+        values = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
+        return values, "log10(power / background)", "background normalized"
+
+    values = np.log10(np.maximum(power, np.finfo(np.float64).tiny))
+    return values, "log10(power)", "raw power"
+
+
+def percentile_levels(values: np.ndarray, low: float, high: float, count: int) -> np.ndarray:
+    vmin = np.nanpercentile(values, low)
+    vmax = np.nanpercentile(values, high)
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or np.isclose(vmin, vmax):
+        vmin = float(np.nanmin(values))
+        vmax = float(np.nanmax(values))
+    if np.isclose(vmin, vmax):
+        vmax = vmin + 1.0
+    return np.linspace(vmin, vmax, count)
+
+
 def plot_wk(
     power: np.ndarray,
     freqs: np.ndarray,
@@ -425,26 +523,15 @@ def plot_wk(
     smooth_passes: int,
     plot_mode: str,
 ) -> None:
+    signal, colorbar_label, title_extra = plot_values(power, plot_mode, smooth_passes)
     if plot_mode == "normalized":
-        bg = background_spectrum(power, smooth_passes)
-        signal = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
         levels = np.linspace(0.0, 0.6, 13)
         cmap = "YlOrRd"
         extend = "max"
-        colorbar_label = "log10(power / background)"
-        title_extra = "background normalized"
     else:
-        signal = np.log10(np.maximum(power, np.finfo(np.float64).tiny))
-        vmin = np.nanpercentile(signal, 5.0)
-        vmax = np.nanpercentile(signal, 99.0)
-        if not np.isfinite(vmin) or not np.isfinite(vmax) or np.isclose(vmin, vmax):
-            vmin = float(np.nanmin(signal))
-            vmax = float(np.nanmax(signal))
-        levels = np.linspace(vmin, vmax, 21)
+        levels = percentile_levels(signal, 5.0, 99.0, 21)
         cmap = "Spectral_r"
         extend = "both"
-        colorbar_label = "log10(power)"
-        title_extra = "raw power"
 
     fig, ax = plt.subplots(figsize=(10.5, 7.5))
     mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap=cmap, extend=extend)
@@ -463,8 +550,71 @@ def plot_wk(
     plt.close(fig)
 
 
+def plot_me_rp_comparison(
+    me_result: dict[str, object],
+    rp_result: dict[str, object],
+    output_file: Path,
+    args: argparse.Namespace,
+) -> None:
+    freqs = me_result["freqs"]
+    ks = me_result["ks"]
+    if not (
+        np.allclose(freqs, rp_result["freqs"])
+        and np.allclose(ks, rp_result["ks"])
+        and me_result["power_ens"].shape == rp_result["power_ens"].shape
+    ):
+        raise ValueError("ME and RP spectra do not share the same frequency/wavenumber grid")
+
+    me_power = me_result["power_ens"]
+    rp_power = rp_result["power_ens"]
+    me_values, colorbar_label, title_extra = plot_values(
+        me_power, args.plot_mode, args.smooth_passes
+    )
+    rp_values, _, _ = plot_values(rp_power, args.plot_mode, args.smooth_passes)
+    combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
+    if args.plot_mode == "normalized":
+        common_levels = np.linspace(0.0, 0.6, 13)
+        common_cmap = "YlOrRd"
+        common_extend = "max"
+    else:
+        common_levels = percentile_levels(combined, 5.0, 99.0, 21)
+        common_cmap = "Spectral_r"
+        common_extend = "both"
+
+    diff = me_power - rp_power
+    diff_limit = np.nanpercentile(np.abs(diff), 99.0)
+    if not np.isfinite(diff_limit) or np.isclose(diff_limit, 0.0):
+        diff_limit = float(np.nanmax(np.abs(diff)))
+    if np.isclose(diff_limit, 0.0):
+        diff_limit = 1.0
+    diff_levels = np.linspace(-diff_limit, diff_limit, 21)
+
+    fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.8), sharey=True)
+    panels = (
+        ("ME", me_values, common_levels, common_cmap, common_extend, colorbar_label),
+        ("RP", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
+        ("ME - RP", diff, diff_levels, "RdBu_r", "both", "ME - RP power"),
+    )
+
+    for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
+        mesh = ax.contourf(ks, freqs, values, levels=levels, cmap=cmap, extend=extend)
+        fig.colorbar(mesh, ax=ax, label=cbar_label)
+        ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
+        add_dispersion_curves(ax, float(freqs.min()), float(freqs.max()))
+        ax.set_title(f"{title} ({title_extra})" if title != "ME - RP" else title)
+        ax.set_xlabel("Zonal wavenumber (eastward > 0)")
+        ax.set_xlim(float(ks.min()), float(ks.max()))
+        ax.set_ylim(float(freqs.min()), min(0.35, float(freqs.max())))
+        ax.grid(alpha=0.25)
+    axes[0].set_ylabel("Frequency (cycles day$^{-1}$)")
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.14, top=0.90, wspace=0.24)
+    fig.savefig(output_file, dpi=180)
+    plt.close(fig)
+
+
 def save_wk_dataset(
     output_file: Path,
+    group: str,
     members: list[str],
     member_power: np.ndarray,
     freqs: np.ndarray,
@@ -488,7 +638,8 @@ def save_wk_dataset(
             "zonal_wavenumber": ks,
         },
         attrs={
-            "description": "RP ensemble-mean WK spectrum from 3-hourly precipitation",
+            "description": f"{group} ensemble-mean WK spectrum from 3-hourly precipitation",
+            "experiment_group": group,
             "base_dir": str(args.base_dir),
             "collection": args.collection,
             "pattern": args.pattern,
@@ -523,7 +674,12 @@ def attr_matches(ds: xr.Dataset, key: str, expected: str | float | int) -> bool:
     return str(actual) == str(expected)
 
 
-def cache_mismatch_reasons(ds: xr.Dataset, args: argparse.Namespace) -> list[str]:
+def cache_mismatch_reasons(
+    ds: xr.Dataset,
+    args: argparse.Namespace,
+    group: str,
+    members: list[str],
+) -> list[str]:
     reasons = []
     required_vars = {"power", "power_ens_mean", "frequency", "zonal_wavenumber"}
     missing_vars = required_vars - set(ds.variables)
@@ -552,72 +708,100 @@ def cache_mismatch_reasons(ds: xr.Dataset, args: argparse.Namespace) -> list[str
         if not attr_matches(ds, key, expected):
             reasons.append(f"{key} differs")
 
+    cached_group = ds.attrs.get("experiment_group")
+    if cached_group is not None and str(cached_group) != group:
+        reasons.append("experiment_group differs")
+
     if "member" in ds.coords:
         cached_members = [str(member) for member in ds.member.values]
-        if cached_members != list(args.members):
+        if cached_members != members:
             reasons.append("member list differs")
     else:
         reasons.append("member coordinate missing")
     return reasons
 
 
-def plot_from_cache(cache_file: Path, out_dir: Path, args: argparse.Namespace) -> bool:
+def load_cached_spectrum(
+    cache_file: Path,
+    args: argparse.Namespace,
+    group: str,
+    members: list[str],
+) -> dict[str, object] | None:
     if args.force or not cache_file.exists():
-        return False
+        return None
 
     try:
         with xr.open_dataset(cache_file) as ds:
-            reasons = cache_mismatch_reasons(ds, args)
+            reasons = cache_mismatch_reasons(ds, args, group, members)
             if reasons:
                 print(f"Cache exists but will be recomputed: {', '.join(reasons)}")
-                return False
+                return None
 
             print(f"Using cached WK spectra: {cache_file}")
-            freqs = ds["frequency"].values
-            ks = ds["zonal_wavenumber"].values
+            return {
+                "group": group,
+                "members": [str(member) for member in ds.member.values],
+                "member_power": ds["power"].values.copy(),
+                "power_ens": ds["power_ens_mean"].values.copy(),
+                "freqs": ds["frequency"].values.copy(),
+                "ks": ds["zonal_wavenumber"].values.copy(),
+                "cache_file": cache_file,
+            }
+    except Exception as exc:
+        print(f"Cache exists but could not be used: {exc}")
+        return None
+
+
+def plot_group_spectra(
+    result: dict[str, object],
+    out_dir: Path,
+    prefix: str,
+    args: argparse.Namespace,
+) -> Path:
+    group = result["group"]
+    png_file = out_dir / f"{prefix}.png"
+    plot_wk(
+        result["power_ens"],
+        result["freqs"],
+        result["ks"],
+        png_file,
+        f"{group} ensemble mean {args.component} {args.var} WK spectrum",
+        args.smooth_passes,
+        args.plot_mode,
+    )
+    if args.plot_members:
+        for index, member in enumerate(result["members"]):
             plot_wk(
-                ds["power_ens_mean"].values,
-                freqs,
-                ks,
-                out_dir / f"{args.out_prefix}.png",
-                f"RP ensemble mean {args.component} {args.var} WK spectrum",
+                result["member_power"][index],
+                result["freqs"],
+                result["ks"],
+                out_dir / f"{prefix}_{member}.png",
+                f"{member} {args.component} {args.var} WK spectrum",
                 args.smooth_passes,
                 args.plot_mode,
             )
-            if args.plot_members:
-                for member in ds.member.values:
-                    member_name = str(member)
-                    plot_wk(
-                        ds["power"].sel(member=member_name).values,
-                        freqs,
-                        ks,
-                        out_dir / f"{args.out_prefix}_{member_name}.png",
-                        f"{member_name} {args.component} {args.var} WK spectrum",
-                        args.smooth_passes,
-                        args.plot_mode,
-                    )
-            print(f"  Plot:   {out_dir / (args.out_prefix + '.png')}")
-            return True
-    except Exception as exc:
-        print(f"Cache exists but could not be used: {exc}")
-        return False
+    return png_file
 
 
-def main() -> None:
-    args = parse_args()
+def compute_or_load_group(
+    group: str,
+    args: argparse.Namespace,
+    out_dir: Path,
+) -> tuple[dict[str, object], str, Path]:
     base_dir = Path(args.base_dir)
-    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(__file__).resolve().parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    nc_file = out_dir / f"{args.out_prefix}.nc4"
-    png_file = out_dir / f"{args.out_prefix}.png"
+    members = group_member_names(group, args.members)
+    prefix = output_prefix_for_group(args, group)
+    nc_file = out_dir / f"{prefix}.nc4"
+    cached = load_cached_spectrum(nc_file, args, group, members)
+    if cached is not None:
+        plot_file = plot_group_spectra(cached, out_dir, prefix, args)
+        print(f"  Plot:   {plot_file}")
+        return cached, prefix, plot_file
 
-    if plot_from_cache(nc_file, out_dir, args):
-        return
-
-    print("Discovering RP member files...")
+    print(f"\nDiscovering {group} member files...")
     files_by_member = {
         member: member_files(base_dir, member, args.collection, args.pattern)
-        for member in args.members
+        for member in members
     }
     for member, files in files_by_member.items():
         print(f"  {member}: {len(files)} files")
@@ -628,9 +812,9 @@ def main() -> None:
     max_steps = None
     if args.max_days is not None:
         max_steps = int(round(args.max_days * 24.0 / args.dt_hours))
-        print(f"Using first {max_steps} samples from each member.")
+        print(f"Using first {max_steps} samples from each {group} member.")
     elif not args.no_truncate_to_common:
-        print("Counting time samples...")
+        print(f"Counting {group} time samples...")
         counts = {
             member: time_count(files, args.var, args.start_time, args.end_time)
             for member, files in files_by_member.items()
@@ -640,11 +824,9 @@ def main() -> None:
         empty_members = [member for member, count in counts.items() if count == 0]
         if empty_members:
             raise RuntimeError(f"no usable time samples for: {', '.join(empty_members)}")
-        common_steps = min(counts.values())
-        max_steps = common_steps
-    if max_steps is not None:
-        if max_steps < 2:
-            raise RuntimeError(f"need at least 2 time samples, got {max_steps}")
+        max_steps = min(counts.values())
+    if max_steps is not None and max_steps < 2:
+        raise RuntimeError(f"need at least 2 time samples, got {max_steps}")
 
     dt_days = args.dt_hours / 24.0
     member_names = []
@@ -690,34 +872,49 @@ def main() -> None:
         member_names.append(member)
         spectra.append(power)
 
-        if args.plot_members:
-            plot_wk(
-                power,
-                freqs,
-                ks,
-                out_dir / f"{args.out_prefix}_{member}.png",
-                f"{member} {args.component} {args.var} WK spectrum",
-                args.smooth_passes,
-                args.plot_mode,
-            )
-
     member_power = np.stack(spectra, axis=0)
     power_ens = member_power.mean(axis=0)
-
-    save_wk_dataset(nc_file, member_names, member_power, freqs_ref, ks_ref, max_steps, args)
-    plot_wk(
-        power_ens,
+    save_wk_dataset(
+        nc_file,
+        group,
+        member_names,
+        member_power,
         freqs_ref,
         ks_ref,
-        png_file,
-        f"RP ensemble mean {args.component} {args.var} WK spectrum",
-        args.smooth_passes,
-        args.plot_mode,
+        max_steps,
+        args,
     )
-
-    print("\nDone.")
+    result = {
+        "group": group,
+        "members": member_names,
+        "member_power": member_power,
+        "power_ens": power_ens,
+        "freqs": freqs_ref,
+        "ks": ks_ref,
+        "cache_file": nc_file,
+    }
+    plot_file = plot_group_spectra(result, out_dir, prefix, args)
+    print(f"\nDone with {group}.")
     print(f"  NetCDF: {nc_file}")
-    print(f"  Plot:   {png_file}")
+    print(f"  Plot:   {plot_file}")
+    return result, prefix, plot_file
+
+
+def main() -> None:
+    args = parse_args()
+    groups = normalized_groups(args.groups)
+    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(__file__).resolve().parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results = {}
+    for group in groups:
+        result, _, _ = compute_or_load_group(group, args, out_dir)
+        results[group] = result
+
+    if "ME" in results and "RP" in results:
+        compare_file = out_dir / f"{comparison_prefix(args, groups)}.png"
+        plot_me_rp_comparison(results["ME"], results["RP"], compare_file, args)
+        print(f"\nComparison plot: {compare_file}")
 
 
 if __name__ == "__main__":
