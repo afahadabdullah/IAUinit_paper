@@ -64,8 +64,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
-        default="/nobackupp27/afahad/project/initialization_shock/paper_figs",
-        help="Output directory for PNG and NetCDF files.",
+        default=None,
+        help="Output directory for PNG and NetCDF files. Default: this script's directory.",
     )
     parser.add_argument(
         "--out-prefix",
@@ -577,7 +577,7 @@ def plot_from_cache(cache_file: Path, out_dir: Path, args: argparse.Namespace) -
 def main() -> None:
     args = parse_args()
     base_dir = Path(args.base_dir)
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(__file__).resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
     nc_file = out_dir / f"{args.out_prefix}.nc4"
     png_file = out_dir / f"{args.out_prefix}.png"
