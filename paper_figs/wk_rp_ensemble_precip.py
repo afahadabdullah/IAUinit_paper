@@ -144,6 +144,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of 1-2-1 smoothing passes for the background spectrum.",
     )
     parser.add_argument(
+        "--plot-mode",
+        choices=("power", "normalized"),
+        default="power",
+        help="Plot raw log10 power or background-normalized log10(power/background).",
+    )
+    parser.add_argument(
         "--no-truncate-to-common",
         action="store_true",
         help="Do not truncate all members to the shortest available lead length.",
@@ -417,17 +423,35 @@ def plot_wk(
     output_file: Path,
     title: str,
     smooth_passes: int,
+    plot_mode: str,
 ) -> None:
-    bg = background_spectrum(power, smooth_passes)
-    signal = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
+    if plot_mode == "normalized":
+        bg = background_spectrum(power, smooth_passes)
+        signal = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
+        levels = np.linspace(0.0, 0.6, 13)
+        cmap = "YlOrRd"
+        extend = "max"
+        colorbar_label = "log10(power / background)"
+        title_extra = "background normalized"
+    else:
+        signal = np.log10(np.maximum(power, np.finfo(np.float64).tiny))
+        vmin = np.nanpercentile(signal, 5.0)
+        vmax = np.nanpercentile(signal, 99.0)
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or np.isclose(vmin, vmax):
+            vmin = float(np.nanmin(signal))
+            vmax = float(np.nanmax(signal))
+        levels = np.linspace(vmin, vmax, 21)
+        cmap = "Spectral_r"
+        extend = "both"
+        colorbar_label = "log10(power)"
+        title_extra = "raw power"
 
     fig, ax = plt.subplots(figsize=(10.5, 7.5))
-    levels = np.linspace(0.0, 0.6, 13)
-    mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap="YlOrRd", extend="max")
-    fig.colorbar(mesh, ax=ax, label="log10(power / background)")
+    mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap=cmap, extend=extend)
+    fig.colorbar(mesh, ax=ax, label=colorbar_label)
     ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
     add_dispersion_curves(ax, float(freqs.min()), float(freqs.max()))
-    ax.set_title(title)
+    ax.set_title(f"{title} ({title_extra})")
     ax.set_xlabel("Zonal wavenumber (eastward > 0)")
     ax.set_ylabel("Frequency (cycles day$^{-1}$)")
     ax.set_xlim(float(ks.min()), float(ks.max()))
@@ -558,6 +582,7 @@ def plot_from_cache(cache_file: Path, out_dir: Path, args: argparse.Namespace) -
                 out_dir / f"{args.out_prefix}.png",
                 f"RP ensemble mean {args.component} {args.var} WK spectrum",
                 args.smooth_passes,
+                args.plot_mode,
             )
             if args.plot_members:
                 for member in ds.member.values:
@@ -569,6 +594,7 @@ def plot_from_cache(cache_file: Path, out_dir: Path, args: argparse.Namespace) -
                         out_dir / f"{args.out_prefix}_{member_name}.png",
                         f"{member_name} {args.component} {args.var} WK spectrum",
                         args.smooth_passes,
+                        args.plot_mode,
                     )
             print(f"  Plot:   {out_dir / (args.out_prefix + '.png')}")
             return True
@@ -672,6 +698,7 @@ def main() -> None:
                 out_dir / f"{args.out_prefix}_{member}.png",
                 f"{member} {args.component} {args.var} WK spectrum",
                 args.smooth_passes,
+                args.plot_mode,
             )
 
     member_power = np.stack(spectra, axis=0)
@@ -685,6 +712,7 @@ def main() -> None:
         png_file,
         f"RP ensemble mean {args.component} {args.var} WK spectrum",
         args.smooth_passes,
+        args.plot_mode,
     )
 
     print("\nDone.")
