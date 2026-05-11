@@ -263,6 +263,10 @@ def load_precip_member(
     da = xr.concat(parts, dim="time").sortby("time")
     if max_steps is not None:
         da = da.isel(time=slice(0, max_steps))
+        if da.sizes["time"] < max_steps:
+            raise RuntimeError(
+                f"only loaded {da.sizes['time']} samples, but {max_steps} were requested"
+            )
     return da
 
 
@@ -596,27 +600,26 @@ def main() -> None:
     if missing:
         raise FileNotFoundError(f"no files found for: {', '.join(missing)}")
 
-    print("Counting time samples...")
-    counts = {
-        member: time_count(files, args.var, args.start_time, args.end_time)
-        for member, files in files_by_member.items()
-    }
-    for member, count in counts.items():
-        print(f"  {member}: {count} samples")
-    empty_members = [member for member, count in counts.items() if count == 0]
-    if empty_members:
-        raise RuntimeError(f"no usable time samples for: {', '.join(empty_members)}")
-
     max_steps = None
     if args.max_days is not None:
         max_steps = int(round(args.max_days * 24.0 / args.dt_hours))
-    if not args.no_truncate_to_common:
+        print(f"Using first {max_steps} samples from each member.")
+    elif not args.no_truncate_to_common:
+        print("Counting time samples...")
+        counts = {
+            member: time_count(files, args.var, args.start_time, args.end_time)
+            for member, files in files_by_member.items()
+        }
+        for member, count in counts.items():
+            print(f"  {member}: {count} samples")
+        empty_members = [member for member, count in counts.items() if count == 0]
+        if empty_members:
+            raise RuntimeError(f"no usable time samples for: {', '.join(empty_members)}")
         common_steps = min(counts.values())
-        max_steps = common_steps if max_steps is None else min(max_steps, common_steps)
+        max_steps = common_steps
     if max_steps is not None:
         if max_steps < 2:
             raise RuntimeError(f"need at least 2 time samples, got {max_steps}")
-        print(f"Using first {max_steps} samples from each member.")
 
     dt_days = args.dt_hours / 24.0
     member_names = []
