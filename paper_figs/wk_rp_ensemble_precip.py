@@ -169,8 +169,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--smooth-passes",
         type=int,
-        default=10,
+        default=20,
         help="Number of 1-2-1 smoothing passes for the background spectrum.",
+    )
+    parser.add_argument(
+        "--background-method",
+        choices=("log", "linear"),
+        default="log",
+        help=(
+            "Background estimate for normalized plots. 'log' smooths log10(power) "
+            "and usually retains sharper WK structure; 'linear' is the old method."
+        ),
+    )
+    parser.add_argument(
+        "--normalized-levels",
+        choices=("adaptive", "fixed"),
+        default="adaptive",
+        help=(
+            "Color levels for normalized plots. 'adaptive' uses centered percentile "
+            "levels around zero; 'fixed' uses the old 0..0.6 positive-only levels."
+        ),
     )
     parser.add_argument(
         "--plot-mode",
@@ -476,11 +494,19 @@ def smooth121(arr: np.ndarray, axis: int) -> np.ndarray:
     )
 
 
-def background_spectrum(power: np.ndarray, passes: int) -> np.ndarray:
-    bg = power.astype(np.float64, copy=True)
+def background_spectrum(power: np.ndarray, passes: int, method: str = "log") -> np.ndarray:
+    power_safe = np.maximum(power, np.finfo(np.float64).tiny)
+    if method == "log":
+        bg = np.log10(power_safe)
+    else:
+        bg = power_safe.astype(np.float64, copy=True)
+
     for _ in range(passes):
         bg = smooth121(bg, axis=0)
         bg = smooth121(bg, axis=1)
+
+    if method == "log":
+        bg = 10.0**bg
     return np.maximum(bg, np.finfo(np.float64).tiny)
 
 
@@ -515,11 +541,16 @@ def plot_values(
     power: np.ndarray,
     plot_mode: str,
     smooth_passes: int,
+    background_method: str,
 ) -> tuple[np.ndarray, str, str]:
     if plot_mode == "normalized":
-        bg = background_spectrum(power, smooth_passes)
+        bg = background_spectrum(power, smooth_passes, background_method)
         values = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
-        return values, "log10(power / background)", "background normalized"
+        return (
+            values,
+            "log10(power / background)",
+            f"background normalized, {background_method} background",
+        )
 
     values = np.log10(np.maximum(power, np.finfo(np.float64).tiny))
     return values, "log10(power)", "raw power"
@@ -536,6 +567,15 @@ def percentile_levels(values: np.ndarray, low: float, high: float, count: int) -
     return np.linspace(vmin, vmax, count)
 
 
+def centered_percentile_levels(values: np.ndarray, percentile: float, count: int) -> np.ndarray:
+    limit = np.nanpercentile(np.abs(values), percentile)
+    if not np.isfinite(limit) or np.isclose(limit, 0.0):
+        limit = float(np.nanmax(np.abs(values)))
+    if np.isclose(limit, 0.0):
+        limit = 1.0
+    return np.linspace(-limit, limit, count)
+
+
 def plot_wk(
     power: np.ndarray,
     freqs: np.ndarray,
@@ -544,12 +584,21 @@ def plot_wk(
     title: str,
     smooth_passes: int,
     plot_mode: str,
+    background_method: str,
+    normalized_levels: str,
 ) -> None:
-    signal, colorbar_label, title_extra = plot_values(power, plot_mode, smooth_passes)
+    signal, colorbar_label, title_extra = plot_values(
+        power, plot_mode, smooth_passes, background_method
+    )
     if plot_mode == "normalized":
-        levels = np.linspace(0.0, 0.6, 13)
-        cmap = "YlOrRd"
-        extend = "max"
+        if normalized_levels == "fixed":
+            levels = np.linspace(0.0, 0.6, 13)
+            cmap = "YlOrRd"
+            extend = "max"
+        else:
+            levels = centered_percentile_levels(signal, 99.0, 21)
+            cmap = "RdBu_r"
+            extend = "both"
     else:
         levels = percentile_levels(signal, 5.0, 99.0, 21)
         cmap = "Spectral_r"
@@ -591,14 +640,21 @@ def plot_me_rp_comparison(
     me_power = me_result["power_ens"]
     rp_power = rp_result["power_ens"]
     me_values, colorbar_label, title_extra = plot_values(
-        me_power, plot_mode, args.smooth_passes
+        me_power, plot_mode, args.smooth_passes, args.background_method
     )
-    rp_values, _, _ = plot_values(rp_power, plot_mode, args.smooth_passes)
+    rp_values, _, _ = plot_values(
+        rp_power, plot_mode, args.smooth_passes, args.background_method
+    )
     combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
     if plot_mode == "normalized":
-        common_levels = np.linspace(0.0, 0.6, 13)
-        common_cmap = "YlOrRd"
-        common_extend = "max"
+        if args.normalized_levels == "fixed":
+            common_levels = np.linspace(0.0, 0.6, 13)
+            common_cmap = "YlOrRd"
+            common_extend = "max"
+        else:
+            common_levels = centered_percentile_levels(combined, 99.0, 21)
+            common_cmap = "RdBu_r"
+            common_extend = "both"
     else:
         common_levels = percentile_levels(combined, 5.0, 99.0, 21)
         common_cmap = "Spectral_r"
@@ -610,12 +666,7 @@ def plot_me_rp_comparison(
     else:
         diff = me_power - rp_power
         diff_label = "ME - RP power"
-    diff_limit = np.nanpercentile(np.abs(diff), 99.0)
-    if not np.isfinite(diff_limit) or np.isclose(diff_limit, 0.0):
-        diff_limit = float(np.nanmax(np.abs(diff)))
-    if np.isclose(diff_limit, 0.0):
-        diff_limit = 1.0
-    diff_levels = np.linspace(-diff_limit, diff_limit, 21)
+    diff_levels = centered_percentile_levels(diff, 99.0, 21)
 
     fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.8), sharey=True)
     panels = (
@@ -651,7 +702,7 @@ def save_wk_dataset(
     args: argparse.Namespace,
 ) -> None:
     power_mean = member_power.mean(axis=0)
-    bg = background_spectrum(power_mean, args.smooth_passes)
+    bg = background_spectrum(power_mean, args.smooth_passes, args.background_method)
     signal = np.log10(np.maximum(power_mean, np.finfo(np.float64).tiny) / bg)
     ds = xr.Dataset(
         data_vars={
@@ -685,6 +736,7 @@ def save_wk_dataset(
             "n_time_samples": -1 if n_time_samples is None else n_time_samples,
             "detrended": str(not args.no_detrend),
             "time_taper": str(not args.no_taper),
+            "background_method": args.background_method,
         },
     )
     ds.to_netcdf(output_file)
@@ -804,6 +856,8 @@ def plot_group_spectra(
             f"{group} ensemble mean {args.component} {args.var} WK spectrum",
             args.smooth_passes,
             mode,
+            args.background_method,
+            args.normalized_levels,
         )
         written.append(png_file)
         if args.plot_members:
@@ -817,6 +871,8 @@ def plot_group_spectra(
                     f"{member} {args.component} {args.var} WK spectrum",
                     args.smooth_passes,
                     mode,
+                    args.background_method,
+                    args.normalized_levels,
                 )
     return written
 
