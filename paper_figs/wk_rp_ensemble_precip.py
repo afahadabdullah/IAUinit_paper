@@ -191,6 +191,21 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--plot-smooth-passes",
+        type=int,
+        default=4,
+        help=(
+            "Number of 1-2-1 smoothing passes applied only to plotted log/ratio "
+            "fields. Use 0 to show unsmoothed spectral bins."
+        ),
+    )
+    parser.add_argument(
+        "--level-percentile",
+        type=float,
+        default=97.5,
+        help="Percentile used for adaptive color limits in plots.",
+    )
+    parser.add_argument(
         "--plot-mode",
         choices=("power", "normalized", "both"),
         default="power",
@@ -576,6 +591,14 @@ def centered_percentile_levels(values: np.ndarray, percentile: float, count: int
     return np.linspace(-limit, limit, count)
 
 
+def smooth_plot_field(values: np.ndarray, passes: int) -> np.ndarray:
+    smoothed = values.astype(np.float64, copy=True)
+    for _ in range(max(0, passes)):
+        smoothed = smooth121(smoothed, axis=0)
+        smoothed = smooth121(smoothed, axis=1)
+    return smoothed
+
+
 def plot_wk(
     power: np.ndarray,
     freqs: np.ndarray,
@@ -586,21 +609,25 @@ def plot_wk(
     plot_mode: str,
     background_method: str,
     normalized_levels: str,
+    plot_smooth_passes: int,
+    level_percentile: float,
 ) -> None:
     signal, colorbar_label, title_extra = plot_values(
         power, plot_mode, smooth_passes, background_method
     )
+    signal = smooth_plot_field(signal, plot_smooth_passes)
     if plot_mode == "normalized":
         if normalized_levels == "fixed":
             levels = np.linspace(0.0, 0.6, 13)
             cmap = "YlOrRd"
             extend = "max"
         else:
-            levels = centered_percentile_levels(signal, 99.0, 21)
+            levels = centered_percentile_levels(signal, level_percentile, 21)
             cmap = "RdBu_r"
             extend = "both"
     else:
-        levels = percentile_levels(signal, 5.0, 99.0, 21)
+        low = max(0.0, 100.0 - level_percentile)
+        levels = percentile_levels(signal, low, level_percentile, 21)
         cmap = "Spectral_r"
         extend = "both"
 
@@ -645,6 +672,8 @@ def plot_me_rp_comparison(
     rp_values, _, _ = plot_values(
         rp_power, plot_mode, args.smooth_passes, args.background_method
     )
+    me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
+    rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
     combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
     if plot_mode == "normalized":
         if args.normalized_levels == "fixed":
@@ -652,11 +681,12 @@ def plot_me_rp_comparison(
             common_cmap = "YlOrRd"
             common_extend = "max"
         else:
-            common_levels = centered_percentile_levels(combined, 99.0, 21)
+            common_levels = centered_percentile_levels(combined, args.level_percentile, 21)
             common_cmap = "RdBu_r"
             common_extend = "both"
     else:
-        common_levels = percentile_levels(combined, 5.0, 99.0, 21)
+        low = max(0.0, 100.0 - args.level_percentile)
+        common_levels = percentile_levels(combined, low, args.level_percentile, 21)
         common_cmap = "Spectral_r"
         common_extend = "both"
 
@@ -665,8 +695,9 @@ def plot_me_rp_comparison(
         diff_label = "ME - RP log10(power / background)"
     else:
         diff = me_power - rp_power
+        diff = smooth_plot_field(diff, args.plot_smooth_passes)
         diff_label = "ME - RP power"
-    diff_levels = centered_percentile_levels(diff, 99.0, 21)
+    diff_levels = centered_percentile_levels(diff, args.level_percentile, 21)
 
     fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.8), sharey=True)
     panels = (
@@ -858,6 +889,8 @@ def plot_group_spectra(
             mode,
             args.background_method,
             args.normalized_levels,
+            args.plot_smooth_passes,
+            args.level_percentile,
         )
         written.append(png_file)
         if args.plot_members:
@@ -873,6 +906,8 @@ def plot_group_spectra(
                     mode,
                     args.background_method,
                     args.normalized_levels,
+                    args.plot_smooth_passes,
+                    args.level_percentile,
                 )
     return written
 
