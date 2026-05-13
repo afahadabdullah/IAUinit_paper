@@ -174,9 +174,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--plot-mode",
-        choices=("power", "normalized"),
+        choices=("power", "normalized", "both"),
         default="power",
-        help="Plot raw log10 power or background-normalized log10(power/background).",
+        help="Plot raw log10 power, background-normalized log10(power/background), or both.",
     )
     parser.add_argument(
         "--no-truncate-to-common",
@@ -197,6 +197,16 @@ def parse_args() -> argparse.Namespace:
         "--plot-members",
         action="store_true",
         help="Also save one WK plot per ensemble member.",
+    )
+    parser.add_argument(
+        "--skip-group-plots",
+        action="store_true",
+        help="Only save the combined ME/RP comparison plot.",
+    )
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="Only plot from existing NetCDF caches; fail instead of reading raw files.",
     )
     parser.add_argument(
         "--force",
@@ -248,6 +258,18 @@ def comparison_prefix(args: argparse.Namespace, groups: list[str]) -> str:
     if "me" in lower_groups and "rp" in lower_groups:
         return "wk_me_rp_precip_ensmean"
     return f"wk_{'_'.join(lower_groups)}_precip_ensmean"
+
+
+def selected_plot_modes(args: argparse.Namespace) -> list[str]:
+    if args.plot_mode == "both":
+        return ["power", "normalized"]
+    return [args.plot_mode]
+
+
+def plot_path(out_dir: Path, prefix: str, plot_mode: str, n_modes: int) -> Path:
+    if n_modes > 1:
+        return out_dir / f"{prefix}_{plot_mode}.png"
+    return out_dir / f"{prefix}.png"
 
 
 def member_files(base_dir: Path, member: str, collection: str, pattern: str) -> list[Path]:
@@ -555,6 +577,7 @@ def plot_me_rp_comparison(
     rp_result: dict[str, object],
     output_file: Path,
     args: argparse.Namespace,
+    plot_mode: str,
 ) -> None:
     freqs = me_result["freqs"]
     ks = me_result["ks"]
@@ -568,11 +591,11 @@ def plot_me_rp_comparison(
     me_power = me_result["power_ens"]
     rp_power = rp_result["power_ens"]
     me_values, colorbar_label, title_extra = plot_values(
-        me_power, args.plot_mode, args.smooth_passes
+        me_power, plot_mode, args.smooth_passes
     )
-    rp_values, _, _ = plot_values(rp_power, args.plot_mode, args.smooth_passes)
+    rp_values, _, _ = plot_values(rp_power, plot_mode, args.smooth_passes)
     combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
-    if args.plot_mode == "normalized":
+    if plot_mode == "normalized":
         common_levels = np.linspace(0.0, 0.6, 13)
         common_cmap = "YlOrRd"
         common_extend = "max"
@@ -581,7 +604,12 @@ def plot_me_rp_comparison(
         common_cmap = "Spectral_r"
         common_extend = "both"
 
-    diff = me_power - rp_power
+    if plot_mode == "normalized":
+        diff = me_values - rp_values
+        diff_label = "ME - RP log10(power / background)"
+    else:
+        diff = me_power - rp_power
+        diff_label = "ME - RP power"
     diff_limit = np.nanpercentile(np.abs(diff), 99.0)
     if not np.isfinite(diff_limit) or np.isclose(diff_limit, 0.0):
         diff_limit = float(np.nanmax(np.abs(diff)))
@@ -593,7 +621,7 @@ def plot_me_rp_comparison(
     panels = (
         ("ME", me_values, common_levels, common_cmap, common_extend, colorbar_label),
         ("RP", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
-        ("ME - RP", diff, diff_levels, "RdBu_r", "both", "ME - RP power"),
+        ("ME - RP", diff, diff_levels, "RdBu_r", "both", diff_label),
     )
 
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
@@ -714,8 +742,9 @@ def cache_mismatch_reasons(
 
     if "member" in ds.coords:
         cached_members = [str(member) for member in ds.member.values]
-        if cached_members != members:
-            reasons.append("member list differs")
+        missing_members = [member for member in members if member not in cached_members]
+        if missing_members:
+            reasons.append(f"requested members missing from cache: {missing_members}")
     else:
         reasons.append("member coordinate missing")
     return reasons
@@ -738,11 +767,12 @@ def load_cached_spectrum(
                 return None
 
             print(f"Using cached WK spectra: {cache_file}")
+            member_power = ds["power"].sel(member=members).values.copy()
             return {
                 "group": group,
-                "members": [str(member) for member in ds.member.values],
-                "member_power": ds["power"].values.copy(),
-                "power_ens": ds["power_ens_mean"].values.copy(),
+                "members": members,
+                "member_power": member_power,
+                "power_ens": member_power.mean(axis=0),
                 "freqs": ds["frequency"].values.copy(),
                 "ks": ds["zonal_wavenumber"].values.copy(),
                 "cache_file": cache_file,
@@ -757,30 +787,38 @@ def plot_group_spectra(
     out_dir: Path,
     prefix: str,
     args: argparse.Namespace,
-) -> Path:
+) -> list[Path]:
+    if args.skip_group_plots:
+        return []
+
     group = result["group"]
-    png_file = out_dir / f"{prefix}.png"
-    plot_wk(
-        result["power_ens"],
-        result["freqs"],
-        result["ks"],
-        png_file,
-        f"{group} ensemble mean {args.component} {args.var} WK spectrum",
-        args.smooth_passes,
-        args.plot_mode,
-    )
-    if args.plot_members:
-        for index, member in enumerate(result["members"]):
-            plot_wk(
-                result["member_power"][index],
-                result["freqs"],
-                result["ks"],
-                out_dir / f"{prefix}_{member}.png",
-                f"{member} {args.component} {args.var} WK spectrum",
-                args.smooth_passes,
-                args.plot_mode,
-            )
-    return png_file
+    plot_modes = selected_plot_modes(args)
+    written = []
+    for mode in plot_modes:
+        png_file = plot_path(out_dir, prefix, mode, len(plot_modes))
+        plot_wk(
+            result["power_ens"],
+            result["freqs"],
+            result["ks"],
+            png_file,
+            f"{group} ensemble mean {args.component} {args.var} WK spectrum",
+            args.smooth_passes,
+            mode,
+        )
+        written.append(png_file)
+        if args.plot_members:
+            for index, member in enumerate(result["members"]):
+                member_prefix = f"{prefix}_{member}"
+                plot_wk(
+                    result["member_power"][index],
+                    result["freqs"],
+                    result["ks"],
+                    plot_path(out_dir, member_prefix, mode, len(plot_modes)),
+                    f"{member} {args.component} {args.var} WK spectrum",
+                    args.smooth_passes,
+                    mode,
+                )
+    return written
 
 
 def compute_or_load_group(
@@ -794,9 +832,12 @@ def compute_or_load_group(
     nc_file = out_dir / f"{prefix}.nc4"
     cached = load_cached_spectrum(nc_file, args, group, members)
     if cached is not None:
-        plot_file = plot_group_spectra(cached, out_dir, prefix, args)
-        print(f"  Plot:   {plot_file}")
-        return cached, prefix, plot_file
+        plot_files = plot_group_spectra(cached, out_dir, prefix, args)
+        for plot_file in plot_files:
+            print(f"  Plot:   {plot_file}")
+        return cached, prefix, plot_files
+    if args.cache_only:
+        raise RuntimeError(f"Cache unavailable for {group}: {nc_file}")
 
     print(f"\nDiscovering {group} member files...")
     files_by_member = {
@@ -893,11 +934,12 @@ def compute_or_load_group(
         "ks": ks_ref,
         "cache_file": nc_file,
     }
-    plot_file = plot_group_spectra(result, out_dir, prefix, args)
+    plot_files = plot_group_spectra(result, out_dir, prefix, args)
     print(f"\nDone with {group}.")
     print(f"  NetCDF: {nc_file}")
-    print(f"  Plot:   {plot_file}")
-    return result, prefix, plot_file
+    for plot_file in plot_files:
+        print(f"  Plot:   {plot_file}")
+    return result, prefix, plot_files
 
 
 def main() -> None:
@@ -912,9 +954,12 @@ def main() -> None:
         results[group] = result
 
     if "ME" in results and "RP" in results:
-        compare_file = out_dir / f"{comparison_prefix(args, groups)}.png"
-        plot_me_rp_comparison(results["ME"], results["RP"], compare_file, args)
-        print(f"\nComparison plot: {compare_file}")
+        prefix = comparison_prefix(args, groups)
+        plot_modes = selected_plot_modes(args)
+        for mode in plot_modes:
+            compare_file = plot_path(out_dir, prefix, mode, len(plot_modes))
+            plot_me_rp_comparison(results["ME"], results["RP"], compare_file, args, mode)
+            print(f"\nComparison plot: {compare_file}")
 
 
 if __name__ == "__main__":
