@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from pathlib import Path
 
@@ -254,6 +255,20 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=97.5,
         help="Percentile used for adaptive color limits in plots.",
+    )
+    parser.add_argument(
+        "--diff-significance-alpha",
+        type=float,
+        default=0.05,
+        help=(
+            "Paired-member p-value threshold for showing ME/RP differences in "
+            "panel C. Use with --no-diff-significance to show all differences."
+        ),
+    )
+    parser.add_argument(
+        "--no-diff-significance",
+        action="store_true",
+        help="Show the full ME/RP difference panel without masking by significance.",
     )
     parser.add_argument(
         "--plot-mode",
@@ -694,20 +709,26 @@ def average_background(
 
 
 def percentile_levels(values: np.ndarray, low: float, high: float, count: int) -> np.ndarray:
-    vmin = np.nanpercentile(values, low)
-    vmax = np.nanpercentile(values, high)
+    finite = np.asarray(values)[np.isfinite(values)]
+    if finite.size == 0:
+        return np.linspace(0.0, 1.0, count)
+    vmin = np.nanpercentile(finite, low)
+    vmax = np.nanpercentile(finite, high)
     if not np.isfinite(vmin) or not np.isfinite(vmax) or np.isclose(vmin, vmax):
-        vmin = float(np.nanmin(values))
-        vmax = float(np.nanmax(values))
+        vmin = float(np.nanmin(finite))
+        vmax = float(np.nanmax(finite))
     if np.isclose(vmin, vmax):
         vmax = vmin + 1.0
     return np.linspace(vmin, vmax, count)
 
 
 def centered_percentile_levels(values: np.ndarray, percentile: float, count: int) -> np.ndarray:
-    limit = np.nanpercentile(np.abs(values), percentile)
+    finite = np.asarray(values)[np.isfinite(values)]
+    if finite.size == 0:
+        return np.linspace(-1.0, 1.0, count)
+    limit = np.nanpercentile(np.abs(finite), percentile)
     if not np.isfinite(limit) or np.isclose(limit, 0.0):
-        limit = float(np.nanmax(np.abs(values)))
+        limit = float(np.nanmax(np.abs(finite)))
     if np.isclose(limit, 0.0):
         limit = 1.0
     return np.linspace(-limit, limit, count)
@@ -761,6 +782,13 @@ def add_colorbar(
     if ticks.size:
         cbar.set_ticks(ticks)
         cbar.set_ticklabels([f"{tick:g}" for tick in ticks])
+
+
+def plot_cmap(name: str, masked_color: str | None = None) -> object:
+    cmap = plt.get_cmap(name).copy()
+    if masked_color is not None:
+        cmap.set_bad(masked_color)
+    return cmap
 
 
 def frequency_to_period(freq: np.ndarray | float) -> np.ndarray | float:
@@ -822,6 +850,56 @@ def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
     if ticks.size:
         secax.set_yticks(ticks)
         secax.set_yticklabels([f"{tick:g}" for tick in ticks])
+
+
+def member_suffix(member: str) -> str:
+    suffix = str(member)
+    if suffix.startswith("GEOSMIT_"):
+        suffix = suffix.split("_", 1)[1]
+    if suffix.startswith(("ME", "RP")):
+        suffix = suffix[2:]
+    return suffix
+
+
+def paired_log_power_significance(
+    me_result: dict[str, object],
+    rp_result: dict[str, object],
+    alpha: float,
+) -> tuple[np.ndarray, list[str]]:
+    me_members = [str(member) for member in me_result["members"]]
+    rp_members = [str(member) for member in rp_result["members"]]
+    rp_lookup = {member_suffix(member): index for index, member in enumerate(rp_members)}
+    pairs = [
+        (member_suffix(member), me_index, rp_lookup[member_suffix(member)])
+        for me_index, member in enumerate(me_members)
+        if member_suffix(member) in rp_lookup
+    ]
+    if len(pairs) < 2:
+        shape = me_result["power_ens"].shape
+        return np.zeros(shape, dtype=bool), [pair[0] for pair in pairs]
+
+    me_power = np.asarray(me_result["member_power"])[[pair[1] for pair in pairs], :, :]
+    rp_power = np.asarray(rp_result["member_power"])[[pair[2] for pair in pairs], :, :]
+    tiny = np.finfo(np.float64).tiny
+    paired_diff = np.log10(np.maximum(me_power, tiny)) - np.log10(np.maximum(rp_power, tiny))
+    n_members = paired_diff.shape[0]
+    mean_diff = np.mean(paired_diff, axis=0)
+    std_diff = np.std(paired_diff, axis=0, ddof=1)
+    stderr = std_diff / math.sqrt(n_members)
+    t_stat = np.zeros_like(mean_diff)
+    nonzero = stderr > 0.0
+    t_stat[nonzero] = mean_diff[nonzero] / stderr[nonzero]
+    t_stat[~nonzero & (np.abs(mean_diff) > 0.0)] = np.inf
+
+    try:
+        from scipy import stats
+
+        p_values = 2.0 * stats.t.sf(np.abs(t_stat), df=n_members - 1)
+    except Exception:
+        vectorized_erfc = np.vectorize(math.erfc)
+        p_values = vectorized_erfc(np.abs(t_stat) / math.sqrt(2.0))
+
+    return np.isfinite(p_values) & (p_values < alpha), [pair[0] for pair in pairs]
 
 
 def smooth_plot_field(values: np.ndarray, passes: int) -> np.ndarray:
@@ -972,6 +1050,7 @@ def plot_me_rp_comparison(
         common_levels = percentile_levels(combined, low, args.level_percentile, 21)
         common_cmap = "Spectral_r"
         common_extend = "both"
+    common_cmap = "YlOrRd"
 
     if plot_mode == "normalized":
         if args.comparison_background == "shared":
@@ -1009,6 +1088,35 @@ def plot_me_rp_comparison(
         diff_cmap = "RdBu_r"
         diff_extend = "both"
 
+    if not args.no_diff_significance:
+        sig_mask, matched_members = paired_log_power_significance(
+            me_result, rp_result, args.diff_significance_alpha
+        )
+        if len(matched_members) < 2:
+            print("  warning: fewer than 2 matched ME/RP members; panel C is fully masked")
+        else:
+            print(
+                "  Panel C significance mask: "
+                f"paired log-power t-test, n={len(matched_members)}, "
+                f"p < {args.diff_significance_alpha:g}"
+            )
+        diff = np.where(sig_mask, diff, np.nan)
+        visible_diff = values_in_frequency_range(diff, freqs, ylim)
+        if plot_mode == "normalized":
+            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                visible_diff,
+                args.normalized_scale,
+                "adaptive",
+                args.level_percentile,
+            )
+        else:
+            diff_levels = centered_percentile_levels(
+                visible_diff, args.level_percentile, 21
+            )
+            diff_cmap = "RdBu_r"
+            diff_extend = "both"
+        diff_label = f"{diff_label}, p < {args.diff_significance_alpha:g}"
+
     fig, axes = plt.subplots(1, 3, figsize=(19.5, 5.8), sharey=True)
     panels = (
         ("ME", me_values, common_levels, common_cmap, common_extend, colorbar_label),
@@ -1017,7 +1125,16 @@ def plot_me_rp_comparison(
     )
 
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
-        mesh = ax.contourf(ks, freqs, values, levels=levels, cmap=cmap, extend=extend)
+        masked_values = np.ma.masked_invalid(values)
+        masked_color = "#f2f2f2" if title == "ME - RP" else None
+        mesh = ax.contourf(
+            ks,
+            freqs,
+            masked_values,
+            levels=levels,
+            cmap=plot_cmap(cmap, masked_color),
+            extend=extend,
+        )
         cbar_pad = 0.12 if title == "ME - RP" else 0.04
         add_colorbar(
             fig,
