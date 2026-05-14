@@ -167,6 +167,17 @@ def parse_args() -> argparse.Namespace:
         help="Maximum plotted frequency in cycles per day.",
     )
     parser.add_argument(
+        "--plot-period-days",
+        nargs=2,
+        type=float,
+        default=(60.0, 3.0),
+        metavar=("PERIOD_LOW", "PERIOD_HIGH"),
+        help=(
+            "Displayed y-axis period range in days per cycle. Default 60 3 shows "
+            "the 60-day to 3-day band. Use 0 0 to show the old full frequency range."
+        ),
+    )
+    parser.add_argument(
         "--smooth-passes",
         type=int,
         default=40,
@@ -669,6 +680,70 @@ def centered_percentile_levels(values: np.ndarray, percentile: float, count: int
     return np.linspace(-limit, limit, count)
 
 
+def frequency_to_period(freq: np.ndarray | float) -> np.ndarray | float:
+    freq_arr = np.asarray(freq, dtype=np.float64)
+    return 1.0 / np.maximum(freq_arr, np.finfo(np.float64).tiny)
+
+
+def period_to_frequency(period: np.ndarray | float) -> np.ndarray | float:
+    period_arr = np.asarray(period, dtype=np.float64)
+    return 1.0 / np.maximum(period_arr, np.finfo(np.float64).tiny)
+
+
+def plot_frequency_limits(
+    freqs: np.ndarray,
+    plot_period_days: tuple[float, float] | list[float],
+) -> tuple[float, float]:
+    data_low = float(freqs.min())
+    data_high = float(freqs.max())
+    periods = np.asarray(plot_period_days, dtype=np.float64)
+    if periods.size == 2 and np.all(periods > 0.0):
+        freq_low = 1.0 / float(np.max(periods))
+        freq_high = 1.0 / float(np.min(periods))
+    else:
+        freq_low = data_low
+        freq_high = min(0.35, data_high)
+
+    freq_low = max(freq_low, data_low)
+    freq_high = min(freq_high, data_high)
+    if not np.isfinite(freq_low) or not np.isfinite(freq_high) or freq_low >= freq_high:
+        return data_low, min(0.35, data_high)
+    return freq_low, freq_high
+
+
+def values_in_frequency_range(
+    values: np.ndarray,
+    freqs: np.ndarray,
+    ylim: tuple[float, float],
+) -> np.ndarray:
+    mask = (freqs >= ylim[0]) & (freqs <= ylim[1])
+    if not np.any(mask):
+        return values
+    return values[mask, :]
+
+
+def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
+    secax = ax.secondary_yaxis(
+        "right", functions=(frequency_to_period, period_to_frequency)
+    )
+    if label:
+        secax.set_ylabel("Period (days per cycle)")
+    ymin, ymax = ax.get_ylim()
+    period_low = min(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
+    period_high = max(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
+    candidate_ticks = np.array(
+        [90, 60, 45, 30, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2, 1],
+        dtype=float,
+    )
+    ticks = candidate_ticks[
+        (candidate_ticks >= period_low - 1.0e-9)
+        & (candidate_ticks <= period_high + 1.0e-9)
+    ]
+    if ticks.size:
+        secax.set_yticks(ticks)
+        secax.set_yticklabels([f"{tick:g}" for tick in ticks])
+
+
 def smooth_plot_field(values: np.ndarray, passes: int) -> np.ndarray:
     smoothed = values.astype(np.float64, copy=True)
     for _ in range(max(0, passes)):
@@ -690,40 +765,44 @@ def plot_wk(
     normalized_levels: str,
     plot_smooth_passes: int,
     level_percentile: float,
+    plot_period_days: tuple[float, float] | list[float],
 ) -> None:
     signal, colorbar_label, title_extra = plot_values(
         power, plot_mode, smooth_freq_passes, smooth_wave_passes, background_method
     )
     signal = smooth_plot_field(signal, plot_smooth_passes)
+    ylim = plot_frequency_limits(freqs, plot_period_days)
+    visible_signal = values_in_frequency_range(signal, freqs, ylim)
     if plot_mode == "normalized":
         if normalized_levels == "fixed":
             levels = np.linspace(0.0, 0.6, 13)
             cmap = "YlOrRd"
             extend = "max"
         else:
-            levels = centered_percentile_levels(signal, level_percentile, 21)
+            levels = centered_percentile_levels(visible_signal, level_percentile, 21)
             cmap = "RdBu_r"
             extend = "both"
     else:
         low = max(0.0, 100.0 - level_percentile)
-        levels = percentile_levels(signal, low, level_percentile, 21)
+        levels = percentile_levels(visible_signal, low, level_percentile, 21)
         cmap = "Spectral_r"
         extend = "both"
 
     fig, ax = plt.subplots(figsize=(10.5, 7.5))
     mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap=cmap, extend=extend)
-    fig.colorbar(mesh, ax=ax, label=colorbar_label)
+    fig.colorbar(mesh, ax=ax, label=colorbar_label, pad=0.12)
     ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
-    add_dispersion_curves(ax, float(freqs.min()), float(freqs.max()))
+    add_dispersion_curves(ax, ylim[0], ylim[1])
     ax.set_title(f"{title} ({title_extra})")
     ax.set_xlabel("Zonal wavenumber (eastward > 0)")
     ax.set_ylabel("Frequency (cycles day$^{-1}$)")
     ax.set_xlim(float(ks.min()), float(ks.max()))
-    ax.set_ylim(float(freqs.min()), min(0.35, float(freqs.max())))
+    ax.set_ylim(*ylim)
+    add_period_axis(ax)
     ax.grid(alpha=0.25)
 
-    fig.subplots_adjust(left=0.09, right=0.88, bottom=0.10, top=0.92)
-    fig.savefig(output_file, dpi=180)
+    fig.subplots_adjust(left=0.09, right=0.86, bottom=0.10, top=0.92)
+    fig.savefig(output_file, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -746,6 +825,7 @@ def plot_me_rp_comparison(
     me_power = me_result["power_ens"]
     rp_power = rp_result["power_ens"]
     smooth_freq_passes, smooth_wave_passes = background_smooth_passes(args)
+    ylim = plot_frequency_limits(freqs, args.plot_period_days)
     if plot_mode == "normalized" and args.comparison_background == "shared":
         shared_bg = average_background(
             me_power,
@@ -778,7 +858,12 @@ def plot_me_rp_comparison(
         )
     me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
     rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
-    combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
+    combined = np.concatenate(
+        [
+            values_in_frequency_range(me_values, freqs, ylim).ravel(),
+            values_in_frequency_range(rp_values, freqs, ylim).ravel(),
+        ]
+    )
     if plot_mode == "normalized":
         if args.normalized_levels == "fixed":
             common_levels = np.linspace(0.0, 0.6, 13)
@@ -806,9 +891,10 @@ def plot_me_rp_comparison(
         diff = me_power - rp_power
         diff = smooth_plot_field(diff, args.plot_smooth_passes)
         diff_label = "ME - RP power"
-    diff_levels = centered_percentile_levels(diff, args.level_percentile, 21)
+    visible_diff = values_in_frequency_range(diff, freqs, ylim)
+    diff_levels = centered_percentile_levels(visible_diff, args.level_percentile, 21)
 
-    fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.8), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(19.5, 5.8), sharey=True)
     panels = (
         ("ME", me_values, common_levels, common_cmap, common_extend, colorbar_label),
         ("RP", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
@@ -817,17 +903,19 @@ def plot_me_rp_comparison(
 
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
         mesh = ax.contourf(ks, freqs, values, levels=levels, cmap=cmap, extend=extend)
-        fig.colorbar(mesh, ax=ax, label=cbar_label)
+        cbar_pad = 0.12 if title == "ME - RP" else 0.04
+        fig.colorbar(mesh, ax=ax, label=cbar_label, pad=cbar_pad)
         ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
-        add_dispersion_curves(ax, float(freqs.min()), float(freqs.max()))
+        add_dispersion_curves(ax, ylim[0], ylim[1])
         ax.set_title(f"{title} ({title_extra})" if title != "ME - RP" else title)
         ax.set_xlabel("Zonal wavenumber (eastward > 0)")
         ax.set_xlim(float(ks.min()), float(ks.max()))
-        ax.set_ylim(float(freqs.min()), min(0.35, float(freqs.max())))
+        ax.set_ylim(*ylim)
         ax.grid(alpha=0.25)
     axes[0].set_ylabel("Frequency (cycles day$^{-1}$)")
-    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.14, top=0.90, wspace=0.24)
-    fig.savefig(output_file, dpi=180)
+    add_period_axis(axes[-1])
+    fig.subplots_adjust(left=0.06, right=0.94, bottom=0.14, top=0.90, wspace=0.30)
+    fig.savefig(output_file, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1007,6 +1095,7 @@ def plot_group_spectra(
             args.normalized_levels,
             args.plot_smooth_passes,
             args.level_percentile,
+            args.plot_period_days,
         )
         written.append(png_file)
         if args.plot_members:
@@ -1025,6 +1114,7 @@ def plot_group_spectra(
                     args.normalized_levels,
                     args.plot_smooth_passes,
                     args.level_percentile,
+                    args.plot_period_days,
                 )
     return written
 
