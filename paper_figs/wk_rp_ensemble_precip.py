@@ -217,7 +217,18 @@ def parse_args() -> argparse.Namespace:
         help=(
             "For normalized ME/RP comparison plots, use one shared ME/RP background "
             "or separate backgrounds for each experiment. Shared averages the ME and "
-            "RP backgrounds and makes the difference panel equivalent to log10(ME/RP)."
+            "RP backgrounds and makes the difference panel equivalent to the ME/RP "
+            "power ratio in the requested normalized scale."
+        ),
+    )
+    parser.add_argument(
+        "--normalized-scale",
+        choices=("log", "ratio"),
+        default="log",
+        help=(
+            "Scale for normalized plots. 'log' plots log10(power/background); "
+            "'ratio' plots the traditional positive power/background, with 1 as "
+            "the background value."
         ),
     )
     parser.add_argument(
@@ -225,8 +236,8 @@ def parse_args() -> argparse.Namespace:
         choices=("adaptive", "fixed"),
         default="adaptive",
         help=(
-            "Color levels for normalized plots. 'adaptive' uses centered percentile "
-            "levels around zero; 'fixed' uses the old 0..0.6 positive-only levels."
+            "Color levels for normalized plots. 'adaptive' uses robust percentile "
+            "levels; 'fixed' uses a fixed range."
         ),
     )
     parser.add_argument(
@@ -248,7 +259,7 @@ def parse_args() -> argparse.Namespace:
         "--plot-mode",
         choices=("power", "normalized", "both"),
         default="power",
-        help="Plot raw log10 power, background-normalized log10(power/background), or both.",
+        help="Plot raw log10 power, background-normalized power, or both.",
     )
     parser.add_argument(
         "--no-truncate-to-common",
@@ -613,17 +624,25 @@ def plot_values(
     smooth_freq_passes: int,
     smooth_wave_passes: int,
     background_method: str,
+    normalized_scale: str,
 ) -> tuple[np.ndarray, str, str]:
     if plot_mode == "normalized":
         bg = background_spectrum(
             power, smooth_freq_passes, smooth_wave_passes, background_method
         )
-        values = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
+        values = normalize_with_background(power, bg, normalized_scale)
+        if normalized_scale == "ratio":
+            colorbar_label = "power / background"
+            title_scale = "ratio"
+        else:
+            colorbar_label = "log10(power / background)"
+            title_scale = "log ratio"
         return (
             values,
-            "log10(power / background)",
+            colorbar_label,
             (
-                f"background normalized, {background_method} background, "
+                f"background normalized {title_scale}, "
+                f"{background_method}-smoothed background, "
                 f"{smooth_freq_passes}x{smooth_wave_passes} smooth"
             ),
         )
@@ -632,16 +651,30 @@ def plot_values(
     return values, "log10(power)", "raw power"
 
 
-def normalized_with_background(power: np.ndarray, background: np.ndarray) -> np.ndarray:
+def normalize_with_background(
+    power: np.ndarray,
+    background: np.ndarray,
+    normalized_scale: str,
+) -> np.ndarray:
     power_safe = np.maximum(power, np.finfo(np.float64).tiny)
     bg_safe = np.maximum(background, np.finfo(np.float64).tiny)
-    return np.log10(power_safe / bg_safe)
+    ratio = power_safe / bg_safe
+    if normalized_scale == "ratio":
+        return ratio
+    return np.log10(ratio)
 
 
-def log_power_ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+def power_ratio(
+    numerator: np.ndarray,
+    denominator: np.ndarray,
+    normalized_scale: str,
+) -> np.ndarray:
     num_safe = np.maximum(numerator, np.finfo(np.float64).tiny)
     den_safe = np.maximum(denominator, np.finfo(np.float64).tiny)
-    return np.log10(num_safe / den_safe)
+    ratio = num_safe / den_safe
+    if normalized_scale == "ratio":
+        return ratio
+    return np.log10(ratio)
 
 
 def average_background(
@@ -678,6 +711,56 @@ def centered_percentile_levels(values: np.ndarray, percentile: float, count: int
     if np.isclose(limit, 0.0):
         limit = 1.0
     return np.linspace(-limit, limit, count)
+
+
+def ratio_percentile_levels(values: np.ndarray, percentile: float, count: int) -> np.ndarray:
+    positive = values[np.isfinite(values) & (values > 0.0)]
+    if positive.size == 0:
+        return np.linspace(0.5, 1.5, count)
+    limit = np.nanpercentile(np.abs(np.log10(positive)), percentile)
+    if not np.isfinite(limit) or np.isclose(limit, 0.0):
+        limit = float(np.nanmax(np.abs(np.log10(positive))))
+    if not np.isfinite(limit) or np.isclose(limit, 0.0):
+        limit = 0.1
+    limit = min(limit, 0.7)
+    return 10.0 ** np.linspace(-limit, limit, count)
+
+
+def normalized_plot_levels(
+    values: np.ndarray,
+    normalized_scale: str,
+    normalized_levels: str,
+    level_percentile: float,
+) -> tuple[np.ndarray, str, str]:
+    if normalized_scale == "ratio":
+        if normalized_levels == "fixed":
+            levels = 10.0 ** np.linspace(-0.30103, 0.30103, 21)
+        else:
+            levels = ratio_percentile_levels(values, level_percentile, 21)
+        return levels, "RdBu_r", "both"
+
+    if normalized_levels == "fixed":
+        return np.linspace(0.0, 0.6, 13), "YlOrRd", "max"
+    return centered_percentile_levels(values, level_percentile, 21), "RdBu_r", "both"
+
+
+def add_colorbar(
+    fig: plt.Figure,
+    mesh: object,
+    ax: plt.Axes,
+    label: str,
+    levels: np.ndarray,
+    pad: float,
+    ratio_ticks: bool = False,
+) -> None:
+    cbar = fig.colorbar(mesh, ax=ax, label=label, pad=pad)
+    if not ratio_ticks:
+        return
+    candidates = np.array([0.2, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 5.0])
+    ticks = candidates[(candidates >= levels[0]) & (candidates <= levels[-1])]
+    if ticks.size:
+        cbar.set_ticks(ticks)
+        cbar.set_ticklabels([f"{tick:g}" for tick in ticks])
 
 
 def frequency_to_period(freq: np.ndarray | float) -> np.ndarray | float:
@@ -762,26 +845,27 @@ def plot_wk(
     smooth_wave_passes: int,
     plot_mode: str,
     background_method: str,
+    normalized_scale: str,
     normalized_levels: str,
     plot_smooth_passes: int,
     level_percentile: float,
     plot_period_days: tuple[float, float] | list[float],
 ) -> None:
     signal, colorbar_label, title_extra = plot_values(
-        power, plot_mode, smooth_freq_passes, smooth_wave_passes, background_method
+        power,
+        plot_mode,
+        smooth_freq_passes,
+        smooth_wave_passes,
+        background_method,
+        normalized_scale,
     )
     signal = smooth_plot_field(signal, plot_smooth_passes)
     ylim = plot_frequency_limits(freqs, plot_period_days)
     visible_signal = values_in_frequency_range(signal, freqs, ylim)
     if plot_mode == "normalized":
-        if normalized_levels == "fixed":
-            levels = np.linspace(0.0, 0.6, 13)
-            cmap = "YlOrRd"
-            extend = "max"
-        else:
-            levels = centered_percentile_levels(visible_signal, level_percentile, 21)
-            cmap = "RdBu_r"
-            extend = "both"
+        levels, cmap, extend = normalized_plot_levels(
+            visible_signal, normalized_scale, normalized_levels, level_percentile
+        )
     else:
         low = max(0.0, 100.0 - level_percentile)
         levels = percentile_levels(visible_signal, low, level_percentile, 21)
@@ -790,7 +874,15 @@ def plot_wk(
 
     fig, ax = plt.subplots(figsize=(10.5, 7.5))
     mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap=cmap, extend=extend)
-    fig.colorbar(mesh, ax=ax, label=colorbar_label, pad=0.12)
+    add_colorbar(
+        fig,
+        mesh,
+        ax,
+        colorbar_label,
+        levels,
+        pad=0.12,
+        ratio_ticks=(plot_mode == "normalized" and normalized_scale == "ratio"),
+    )
     ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
     add_dispersion_curves(ax, ylim[0], ylim[1])
     ax.set_title(f"{title} ({title_extra})")
@@ -834,11 +926,16 @@ def plot_me_rp_comparison(
             smooth_wave_passes,
             args.background_method,
         )
-        me_values = normalized_with_background(me_power, shared_bg)
-        rp_values = normalized_with_background(rp_power, shared_bg)
-        colorbar_label = "log10(power / mean ME/RP background)"
+        me_values = normalize_with_background(me_power, shared_bg, args.normalized_scale)
+        rp_values = normalize_with_background(rp_power, shared_bg, args.normalized_scale)
+        if args.normalized_scale == "ratio":
+            colorbar_label = "power / mean ME/RP background"
+            title_scale = "ratio"
+        else:
+            colorbar_label = "log10(power / mean ME/RP background)"
+            title_scale = "log ratio"
         title_extra = (
-            f"mean ME/RP {args.background_method} background, "
+            f"mean ME/RP {args.background_method}-smoothed background {title_scale}, "
             f"{smooth_freq_passes}x{smooth_wave_passes} smooth"
         )
     else:
@@ -848,6 +945,7 @@ def plot_me_rp_comparison(
             smooth_freq_passes,
             smooth_wave_passes,
             args.background_method,
+            args.normalized_scale,
         )
         rp_values, _, _ = plot_values(
             rp_power,
@@ -855,6 +953,7 @@ def plot_me_rp_comparison(
             smooth_freq_passes,
             smooth_wave_passes,
             args.background_method,
+            args.normalized_scale,
         )
     me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
     rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
@@ -865,14 +964,12 @@ def plot_me_rp_comparison(
         ]
     )
     if plot_mode == "normalized":
-        if args.normalized_levels == "fixed":
-            common_levels = np.linspace(0.0, 0.6, 13)
-            common_cmap = "YlOrRd"
-            common_extend = "max"
-        else:
-            common_levels = centered_percentile_levels(combined, args.level_percentile, 21)
-            common_cmap = "RdBu_r"
-            common_extend = "both"
+        common_levels, common_cmap, common_extend = normalized_plot_levels(
+            combined,
+            args.normalized_scale,
+            args.normalized_levels,
+            args.level_percentile,
+        )
     else:
         low = max(0.0, 100.0 - args.level_percentile)
         common_levels = percentile_levels(combined, low, args.level_percentile, 21)
@@ -881,30 +978,59 @@ def plot_me_rp_comparison(
 
     if plot_mode == "normalized":
         if args.comparison_background == "shared":
-            diff = log_power_ratio(me_power, rp_power)
+            diff = power_ratio(me_power, rp_power, args.normalized_scale)
             diff = smooth_plot_field(diff, args.plot_smooth_passes)
-            diff_label = "log10(ME / RP)"
+            if args.normalized_scale == "ratio":
+                diff_label = "ME / RP power"
+            else:
+                diff_label = "log10(ME / RP)"
+            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                values_in_frequency_range(diff, freqs, ylim),
+                args.normalized_scale,
+                "adaptive",
+                args.level_percentile,
+            )
         else:
-            diff = me_values - rp_values
-            diff_label = "ME - RP log10(power / background)"
+            if args.normalized_scale == "ratio":
+                diff = power_ratio(me_values, rp_values, args.normalized_scale)
+                diff_label = "ME / RP normalized ratio"
+            else:
+                diff = me_values - rp_values
+                diff_label = "ME - RP log10(power / background)"
+            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                values_in_frequency_range(diff, freqs, ylim),
+                args.normalized_scale,
+                "adaptive",
+                args.level_percentile,
+            )
     else:
         diff = me_power - rp_power
         diff = smooth_plot_field(diff, args.plot_smooth_passes)
         diff_label = "ME - RP power"
-    visible_diff = values_in_frequency_range(diff, freqs, ylim)
-    diff_levels = centered_percentile_levels(visible_diff, args.level_percentile, 21)
+        visible_diff = values_in_frequency_range(diff, freqs, ylim)
+        diff_levels = centered_percentile_levels(visible_diff, args.level_percentile, 21)
+        diff_cmap = "RdBu_r"
+        diff_extend = "both"
 
     fig, axes = plt.subplots(1, 3, figsize=(19.5, 5.8), sharey=True)
     panels = (
         ("ME", me_values, common_levels, common_cmap, common_extend, colorbar_label),
         ("RP", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
-        ("ME - RP", diff, diff_levels, "RdBu_r", "both", diff_label),
+        ("ME - RP", diff, diff_levels, diff_cmap, diff_extend, diff_label),
     )
 
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
         mesh = ax.contourf(ks, freqs, values, levels=levels, cmap=cmap, extend=extend)
         cbar_pad = 0.12 if title == "ME - RP" else 0.04
-        fig.colorbar(mesh, ax=ax, label=cbar_label, pad=cbar_pad)
+        add_colorbar(
+            fig,
+            mesh,
+            ax,
+            cbar_label,
+            levels,
+            pad=cbar_pad,
+            ratio_ticks=(plot_mode == "normalized" and args.normalized_scale == "ratio"),
+        )
         ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
         add_dispersion_curves(ax, ylim[0], ylim[1])
         ax.set_title(f"{title} ({title_extra})" if title != "ME - RP" else title)
@@ -934,12 +1060,14 @@ def save_wk_dataset(
     bg = background_spectrum(
         power_mean, smooth_freq_passes, smooth_wave_passes, args.background_method
     )
-    signal = np.log10(np.maximum(power_mean, np.finfo(np.float64).tiny) / bg)
+    ratio = np.maximum(power_mean, np.finfo(np.float64).tiny) / bg
+    signal = np.log10(ratio)
     ds = xr.Dataset(
         data_vars={
             "power": (("member", "frequency", "zonal_wavenumber"), member_power),
             "power_ens_mean": (("frequency", "zonal_wavenumber"), power_mean),
             "background_ens_mean": (("frequency", "zonal_wavenumber"), bg),
+            "power_to_background": (("frequency", "zonal_wavenumber"), ratio),
             "signal_to_background": (("frequency", "zonal_wavenumber"), signal),
         },
         coords={
@@ -1092,6 +1220,7 @@ def plot_group_spectra(
             smooth_wave_passes,
             mode,
             args.background_method,
+            args.normalized_scale,
             args.normalized_levels,
             args.plot_smooth_passes,
             args.level_percentile,
@@ -1111,6 +1240,7 @@ def plot_group_spectra(
                     smooth_wave_passes,
                     mode,
                     args.background_method,
+                    args.normalized_scale,
                     args.normalized_levels,
                     args.plot_smooth_passes,
                     args.level_percentile,
