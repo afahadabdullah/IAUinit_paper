@@ -169,8 +169,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--smooth-passes",
         type=int,
-        default=20,
+        default=40,
         help="Number of 1-2-1 smoothing passes for the background spectrum.",
+    )
+    parser.add_argument(
+        "--smooth-freq-passes",
+        type=int,
+        default=None,
+        help=(
+            "Optional number of background smoothing passes along frequency. "
+            "Default: use --smooth-passes."
+        ),
+    )
+    parser.add_argument(
+        "--smooth-wave-passes",
+        type=int,
+        default=None,
+        help=(
+            "Optional number of background smoothing passes along zonal wavenumber. "
+            "Default: use --smooth-passes."
+        ),
     )
     parser.add_argument(
         "--background-method",
@@ -187,8 +205,8 @@ def parse_args() -> argparse.Namespace:
         default="shared",
         help=(
             "For normalized ME/RP comparison plots, use one shared ME/RP background "
-            "or separate backgrounds for each experiment. Shared makes the difference "
-            "panel equivalent to log10(ME/RP)."
+            "or separate backgrounds for each experiment. Shared averages the ME and "
+            "RP backgrounds and makes the difference panel equivalent to log10(ME/RP)."
         ),
     )
     parser.add_argument(
@@ -307,6 +325,16 @@ def selected_plot_modes(args: argparse.Namespace) -> list[str]:
     if args.plot_mode == "both":
         return ["power", "normalized"]
     return [args.plot_mode]
+
+
+def background_smooth_passes(args: argparse.Namespace) -> tuple[int, int]:
+    freq_passes = args.smooth_freq_passes
+    wave_passes = args.smooth_wave_passes
+    if freq_passes is None:
+        freq_passes = args.smooth_passes
+    if wave_passes is None:
+        wave_passes = args.smooth_passes
+    return max(0, int(freq_passes)), max(0, int(wave_passes))
 
 
 def plot_path(out_dir: Path, prefix: str, plot_mode: str, n_modes: int) -> Path:
@@ -519,15 +547,21 @@ def smooth121(arr: np.ndarray, axis: int) -> np.ndarray:
     )
 
 
-def background_spectrum(power: np.ndarray, passes: int, method: str = "log") -> np.ndarray:
+def background_spectrum(
+    power: np.ndarray,
+    freq_passes: int,
+    wave_passes: int,
+    method: str = "log",
+) -> np.ndarray:
     power_safe = np.maximum(power, np.finfo(np.float64).tiny)
     if method == "log":
         bg = np.log10(power_safe)
     else:
         bg = power_safe.astype(np.float64, copy=True)
 
-    for _ in range(passes):
+    for _ in range(max(0, freq_passes)):
         bg = smooth121(bg, axis=0)
+    for _ in range(max(0, wave_passes)):
         bg = smooth121(bg, axis=1)
 
     if method == "log":
@@ -565,16 +599,22 @@ def add_dispersion_curves(ax: plt.Axes, fmin: float, fmax: float) -> None:
 def plot_values(
     power: np.ndarray,
     plot_mode: str,
-    smooth_passes: int,
+    smooth_freq_passes: int,
+    smooth_wave_passes: int,
     background_method: str,
 ) -> tuple[np.ndarray, str, str]:
     if plot_mode == "normalized":
-        bg = background_spectrum(power, smooth_passes, background_method)
+        bg = background_spectrum(
+            power, smooth_freq_passes, smooth_wave_passes, background_method
+        )
         values = np.log10(np.maximum(power, np.finfo(np.float64).tiny) / bg)
         return (
             values,
             "log10(power / background)",
-            f"background normalized, {background_method} background",
+            (
+                f"background normalized, {background_method} background, "
+                f"{smooth_freq_passes}x{smooth_wave_passes} smooth"
+            ),
         )
 
     values = np.log10(np.maximum(power, np.finfo(np.float64).tiny))
@@ -591,6 +631,22 @@ def log_power_ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarra
     num_safe = np.maximum(numerator, np.finfo(np.float64).tiny)
     den_safe = np.maximum(denominator, np.finfo(np.float64).tiny)
     return np.log10(num_safe / den_safe)
+
+
+def average_background(
+    me_power: np.ndarray,
+    rp_power: np.ndarray,
+    smooth_freq_passes: int,
+    smooth_wave_passes: int,
+    background_method: str,
+) -> np.ndarray:
+    me_bg = background_spectrum(
+        me_power, smooth_freq_passes, smooth_wave_passes, background_method
+    )
+    rp_bg = background_spectrum(
+        rp_power, smooth_freq_passes, smooth_wave_passes, background_method
+    )
+    return 0.5 * (me_bg + rp_bg)
 
 
 def percentile_levels(values: np.ndarray, low: float, high: float, count: int) -> np.ndarray:
@@ -627,7 +683,8 @@ def plot_wk(
     ks: np.ndarray,
     output_file: Path,
     title: str,
-    smooth_passes: int,
+    smooth_freq_passes: int,
+    smooth_wave_passes: int,
     plot_mode: str,
     background_method: str,
     normalized_levels: str,
@@ -635,7 +692,7 @@ def plot_wk(
     level_percentile: float,
 ) -> None:
     signal, colorbar_label, title_extra = plot_values(
-        power, plot_mode, smooth_passes, background_method
+        power, plot_mode, smooth_freq_passes, smooth_wave_passes, background_method
     )
     signal = smooth_plot_field(signal, plot_smooth_passes)
     if plot_mode == "normalized":
@@ -688,20 +745,36 @@ def plot_me_rp_comparison(
 
     me_power = me_result["power_ens"]
     rp_power = rp_result["power_ens"]
+    smooth_freq_passes, smooth_wave_passes = background_smooth_passes(args)
     if plot_mode == "normalized" and args.comparison_background == "shared":
-        shared_bg = background_spectrum(
-            0.5 * (me_power + rp_power), args.smooth_passes, args.background_method
+        shared_bg = average_background(
+            me_power,
+            rp_power,
+            smooth_freq_passes,
+            smooth_wave_passes,
+            args.background_method,
         )
         me_values = normalized_with_background(me_power, shared_bg)
         rp_values = normalized_with_background(rp_power, shared_bg)
-        colorbar_label = "log10(power / shared background)"
-        title_extra = f"shared {args.background_method} background"
+        colorbar_label = "log10(power / mean ME/RP background)"
+        title_extra = (
+            f"mean ME/RP {args.background_method} background, "
+            f"{smooth_freq_passes}x{smooth_wave_passes} smooth"
+        )
     else:
         me_values, colorbar_label, title_extra = plot_values(
-            me_power, plot_mode, args.smooth_passes, args.background_method
+            me_power,
+            plot_mode,
+            smooth_freq_passes,
+            smooth_wave_passes,
+            args.background_method,
         )
         rp_values, _, _ = plot_values(
-            rp_power, plot_mode, args.smooth_passes, args.background_method
+            rp_power,
+            plot_mode,
+            smooth_freq_passes,
+            smooth_wave_passes,
+            args.background_method,
         )
     me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
     rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
@@ -769,7 +842,10 @@ def save_wk_dataset(
     args: argparse.Namespace,
 ) -> None:
     power_mean = member_power.mean(axis=0)
-    bg = background_spectrum(power_mean, args.smooth_passes, args.background_method)
+    smooth_freq_passes, smooth_wave_passes = background_smooth_passes(args)
+    bg = background_spectrum(
+        power_mean, smooth_freq_passes, smooth_wave_passes, args.background_method
+    )
     signal = np.log10(np.maximum(power_mean, np.finfo(np.float64).tiny) / bg)
     ds = xr.Dataset(
         data_vars={
@@ -804,6 +880,8 @@ def save_wk_dataset(
             "detrended": str(not args.no_detrend),
             "time_taper": str(not args.no_taper),
             "background_method": args.background_method,
+            "background_smooth_freq_passes": smooth_freq_passes,
+            "background_smooth_wave_passes": smooth_wave_passes,
         },
     )
     ds.to_netcdf(output_file)
@@ -912,6 +990,7 @@ def plot_group_spectra(
 
     group = result["group"]
     plot_modes = selected_plot_modes(args)
+    smooth_freq_passes, smooth_wave_passes = background_smooth_passes(args)
     written = []
     for mode in plot_modes:
         png_file = plot_path(out_dir, prefix, mode, len(plot_modes))
@@ -921,7 +1000,8 @@ def plot_group_spectra(
             result["ks"],
             png_file,
             f"{group} ensemble mean {args.component} {args.var} WK spectrum",
-            args.smooth_passes,
+            smooth_freq_passes,
+            smooth_wave_passes,
             mode,
             args.background_method,
             args.normalized_levels,
@@ -938,7 +1018,8 @@ def plot_group_spectra(
                     result["ks"],
                     plot_path(out_dir, member_prefix, mode, len(plot_modes)),
                     f"{member} {args.component} {args.var} WK spectrum",
-                    args.smooth_passes,
+                    smooth_freq_passes,
+                    smooth_wave_passes,
                     mode,
                     args.background_method,
                     args.normalized_levels,
