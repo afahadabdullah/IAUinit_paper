@@ -814,10 +814,7 @@ def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
     ymin, ymax = ax.get_ylim()
     period_low = min(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
     period_high = max(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
-    candidate_ticks = np.array(
-        [90, 60, 45, 30, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2, 1],
-        dtype=float,
-    )
+    candidate_ticks = np.array([30, 6, 3], dtype=float)
     ticks = candidate_ticks[
         (candidate_ticks >= period_low - 1.0e-9)
         & (candidate_ticks <= period_high + 1.0e-9)
