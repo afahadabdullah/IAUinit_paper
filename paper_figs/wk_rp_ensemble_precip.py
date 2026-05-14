@@ -179,6 +179,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--mask-westward-shorter-than-days",
+        type=float,
+        default=12.0,
+        help=(
+            "White out negative zonal wavenumbers with periods shorter than this "
+            "many days. Default: 12. Use 0 to disable."
+        ),
+    )
+    parser.add_argument(
         "--smooth-passes",
         type=int,
         default=40,
@@ -863,6 +872,30 @@ def values_in_frequency_range(
     return values[mask, :]
 
 
+def westward_short_period_mask(
+    freqs: np.ndarray,
+    ks: np.ndarray,
+    period_days: float,
+) -> np.ndarray:
+    if period_days <= 0.0:
+        return np.zeros((freqs.size, ks.size), dtype=bool)
+    return (ks[None, :] < 0.0) & (freqs[:, None] > 1.0 / period_days)
+
+
+def mask_westward_short_period(
+    values: np.ndarray,
+    freqs: np.ndarray,
+    ks: np.ndarray,
+    period_days: float,
+) -> np.ndarray:
+    mask = westward_short_period_mask(freqs, ks, period_days)
+    if not np.any(mask):
+        return values
+    masked = values.astype(np.float64, copy=True)
+    masked[mask] = np.nan
+    return masked
+
+
 def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
     secax = ax.secondary_yaxis(
         "right", functions=(frequency_to_period, period_to_frequency)
@@ -969,6 +1002,7 @@ def plot_wk(
     plot_smooth_passes: int,
     level_percentile: float,
     plot_period_days: tuple[float, float] | list[float],
+    mask_westward_shorter_than_days: float,
 ) -> None:
     signal, colorbar_label, title_extra = plot_values(
         power,
@@ -979,6 +1013,9 @@ def plot_wk(
         normalized_scale,
     )
     signal = smooth_plot_field(signal, plot_smooth_passes)
+    signal = mask_westward_short_period(
+        signal, freqs, ks, mask_westward_shorter_than_days
+    )
     ylim = plot_frequency_limits(freqs, plot_period_days)
     visible_signal = values_in_frequency_range(signal, freqs, ylim)
     if plot_mode == "normalized":
@@ -992,7 +1029,14 @@ def plot_wk(
         extend = "both"
 
     fig, ax = plt.subplots(figsize=(10.5, 7.5))
-    mesh = ax.contourf(ks, freqs, signal, levels=levels, cmap=cmap, extend=extend)
+    mesh = ax.contourf(
+        ks,
+        freqs,
+        np.ma.masked_invalid(signal),
+        levels=levels,
+        cmap=plot_cmap(cmap, "#ffffff"),
+        extend=extend,
+    )
     add_colorbar(
         fig,
         mesh,
@@ -1076,6 +1120,12 @@ def plot_me_rp_comparison(
         )
     me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
     rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
+    me_values = mask_westward_short_period(
+        me_values, freqs, ks, args.mask_westward_shorter_than_days
+    )
+    rp_values = mask_westward_short_period(
+        rp_values, freqs, ks, args.mask_westward_shorter_than_days
+    )
     combined = np.concatenate(
         [
             values_in_frequency_range(me_values, freqs, ylim).ravel(),
@@ -1154,6 +1204,10 @@ def plot_me_rp_comparison(
         if len(matched_members) < 2:
             print("  warning: fewer than 2 matched ME/RP members; panel C is fully masked")
         else:
+            plot_mask = westward_short_period_mask(
+                freqs, ks, args.mask_westward_shorter_than_days
+            )
+            sig_mask = sig_mask & ~plot_mask
             visible_sig = values_in_frequency_range(sig_mask.astype(float), freqs, ylim)
             visible_count = int(np.count_nonzero(visible_sig))
             total_count = int(visible_sig.size)
@@ -1183,6 +1237,10 @@ def plot_me_rp_comparison(
             diff_cmap = "RdBu_r"
             diff_extend = "both"
         diff_label = f"{diff_label}, {sig_description}"
+
+    diff = mask_westward_short_period(
+        diff, freqs, ks, args.mask_westward_shorter_than_days
+    )
 
     fig, axes = plt.subplots(1, 3, figsize=(19.5, 5.8), sharey=True)
     panels = (
@@ -1429,6 +1487,7 @@ def plot_group_spectra(
             args.plot_smooth_passes,
             args.level_percentile,
             args.plot_period_days,
+            args.mask_westward_shorter_than_days,
         )
         written.append(png_file)
         if args.plot_members:
@@ -1449,6 +1508,7 @@ def plot_group_spectra(
                     args.plot_smooth_passes,
                     args.level_percentile,
                     args.plot_period_days,
+                    args.mask_westward_shorter_than_days,
                 )
     return written
 
