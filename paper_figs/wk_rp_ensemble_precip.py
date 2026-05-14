@@ -1105,7 +1105,7 @@ def plot_me_rp_comparison(
                 diff = log2_power_ratio(me_power, rp_power)
                 diff = smooth_plot_field(diff, args.plot_smooth_passes)
                 diff_label = "log2(ME / RP power)"
-                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_levels = np.linspace(-0.5, 0.5, 21)
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
@@ -1122,7 +1122,7 @@ def plot_me_rp_comparison(
             if args.normalized_scale == "ratio":
                 diff = log2_power_ratio(me_values, rp_values)
                 diff_label = "log2(ME / RP normalized ratio)"
-                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_levels = np.linspace(-0.5, 0.5, 21)
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
@@ -1166,7 +1166,7 @@ def plot_me_rp_comparison(
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
         if plot_mode == "normalized":
             if args.normalized_scale == "ratio":
-                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_levels = np.linspace(-0.5, 0.5, 21)
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
