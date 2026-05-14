@@ -171,11 +171,11 @@ def parse_args() -> argparse.Namespace:
         "--plot-period-days",
         nargs=2,
         type=float,
-        default=(60.0, 3.0),
+        default=(90.0, 3.0),
         metavar=("PERIOD_LOW", "PERIOD_HIGH"),
         help=(
-            "Displayed y-axis period range in days per cycle. Default 60 3 shows "
-            "the 60-day to 3-day band. Use 0 0 to show the old full frequency range."
+            "Displayed y-axis period range in days per cycle. Default 90 3 shows "
+            "the 90-day to 3-day band. Use 0 0 to show the old full frequency range."
         ),
     )
     parser.add_argument(
@@ -277,7 +277,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--diff-significance-fraction",
         type=float,
-        default=0.8,
+        default=0.6,
         help=(
             "Minimum paired-member sign agreement for panel C when "
             "--diff-significance-test agreement is used."
@@ -710,6 +710,12 @@ def power_ratio(
     return np.log10(ratio)
 
 
+def log2_power_ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    num_safe = np.maximum(numerator, np.finfo(np.float64).tiny)
+    den_safe = np.maximum(denominator, np.finfo(np.float64).tiny)
+    return np.log2(num_safe / den_safe)
+
+
 def average_background(
     me_power: np.ndarray,
     rp_power: np.ndarray,
@@ -835,12 +841,12 @@ def plot_frequency_limits(
     if periods.size == 2 and np.all(periods > 0.0):
         freq_low = 1.0 / float(np.max(periods))
         freq_high = 1.0 / float(np.min(periods))
+        freq_low = max(freq_low, np.finfo(np.float64).tiny)
+        freq_high = min(freq_high, data_high)
     else:
         freq_low = data_low
         freq_high = min(0.35, data_high)
 
-    freq_low = max(freq_low, data_low)
-    freq_high = min(freq_high, data_high)
     if not np.isfinite(freq_low) or not np.isfinite(freq_high) or freq_low >= freq_high:
         return data_low, min(0.35, data_high)
     return freq_low, freq_high
@@ -866,7 +872,7 @@ def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
     ymin, ymax = ax.get_ylim()
     period_low = min(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
     period_high = max(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
-    candidate_ticks = np.array([30, 6, 3], dtype=float)
+    candidate_ticks = np.array([60, 30, 6, 3], dtype=float)
     ticks = candidate_ticks[
         (candidate_ticks >= period_low - 1.0e-9)
         & (candidate_ticks <= period_high + 1.0e-9)
@@ -1095,31 +1101,39 @@ def plot_me_rp_comparison(
 
     if plot_mode == "normalized":
         if args.comparison_background == "shared":
-            diff = power_ratio(me_power, rp_power, args.normalized_scale)
-            diff = smooth_plot_field(diff, args.plot_smooth_passes)
             if args.normalized_scale == "ratio":
-                diff_label = "ME / RP power"
+                diff = log2_power_ratio(me_power, rp_power)
+                diff = smooth_plot_field(diff, args.plot_smooth_passes)
+                diff_label = "log2(ME / RP power)"
+                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_cmap = "RdBu_r"
+                diff_extend = "both"
             else:
+                diff = power_ratio(me_power, rp_power, args.normalized_scale)
+                diff = smooth_plot_field(diff, args.plot_smooth_passes)
                 diff_label = "log10(ME / RP)"
-            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
-                values_in_frequency_range(diff, freqs, ylim),
-                args.normalized_scale,
-                "adaptive",
-                args.level_percentile,
-            )
+                diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                    values_in_frequency_range(diff, freqs, ylim),
+                    args.normalized_scale,
+                    "adaptive",
+                    args.level_percentile,
+                )
         else:
             if args.normalized_scale == "ratio":
-                diff = power_ratio(me_values, rp_values, args.normalized_scale)
-                diff_label = "ME / RP normalized ratio"
+                diff = log2_power_ratio(me_values, rp_values)
+                diff_label = "log2(ME / RP normalized ratio)"
+                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_cmap = "RdBu_r"
+                diff_extend = "both"
             else:
                 diff = me_values - rp_values
                 diff_label = "ME - RP log10(power / background)"
-            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
-                values_in_frequency_range(diff, freqs, ylim),
-                args.normalized_scale,
-                "adaptive",
-                args.level_percentile,
-            )
+                diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                    values_in_frequency_range(diff, freqs, ylim),
+                    args.normalized_scale,
+                    "adaptive",
+                    args.level_percentile,
+                )
     else:
         diff = me_power - rp_power
         diff = smooth_plot_field(diff, args.plot_smooth_passes)
@@ -1151,12 +1165,17 @@ def plot_me_rp_comparison(
         diff = np.where(sig_mask, diff, np.nan)
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
         if plot_mode == "normalized":
-            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
-                visible_diff,
-                args.normalized_scale,
-                "adaptive",
-                args.level_percentile,
-            )
+            if args.normalized_scale == "ratio":
+                diff_levels = np.linspace(-2.0, 2.0, 21)
+                diff_cmap = "RdBu_r"
+                diff_extend = "both"
+            else:
+                diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                    visible_diff,
+                    args.normalized_scale,
+                    "adaptive",
+                    args.level_percentile,
+                )
         else:
             diff_levels = centered_percentile_levels(
                 visible_diff, args.level_percentile, 21
@@ -1174,7 +1193,19 @@ def plot_me_rp_comparison(
 
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
         masked_values = np.ma.masked_invalid(values)
-        masked_color = "#f2f2f2" if title == "ME - RP" else None
+        if (
+            title in {"ME", "RP"}
+            and plot_mode == "normalized"
+            and args.normalized_scale == "ratio"
+        ):
+            masked_values = np.ma.masked_where(values < 1.0, masked_values)
+        masked_color = (
+            "#ffffff"
+            if title in {"ME", "RP"}
+            and plot_mode == "normalized"
+            and args.normalized_scale == "ratio"
+            else "#f2f2f2" if title == "ME - RP" else None
+        )
         under_color = (
             "#ffffff"
             if title in {"ME", "RP"}
@@ -1198,7 +1229,11 @@ def plot_me_rp_comparison(
             cbar_label,
             levels,
             pad=cbar_pad,
-            ratio_ticks=(plot_mode == "normalized" and args.normalized_scale == "ratio"),
+            ratio_ticks=(
+                title != "ME - RP"
+                and plot_mode == "normalized"
+                and args.normalized_scale == "ratio"
+            ),
         )
         ax.axvline(0.0, color="k", linestyle="--", linewidth=0.8)
         add_dispersion_curves(ax, ylim[0], ylim[1])
