@@ -182,6 +182,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--comparison-background",
+        choices=("shared", "separate"),
+        default="shared",
+        help=(
+            "For normalized ME/RP comparison plots, use one shared ME/RP background "
+            "or separate backgrounds for each experiment. Shared makes the difference "
+            "panel equivalent to log10(ME/RP)."
+        ),
+    )
+    parser.add_argument(
         "--normalized-levels",
         choices=("adaptive", "fixed"),
         default="adaptive",
@@ -571,6 +581,18 @@ def plot_values(
     return values, "log10(power)", "raw power"
 
 
+def normalized_with_background(power: np.ndarray, background: np.ndarray) -> np.ndarray:
+    power_safe = np.maximum(power, np.finfo(np.float64).tiny)
+    bg_safe = np.maximum(background, np.finfo(np.float64).tiny)
+    return np.log10(power_safe / bg_safe)
+
+
+def log_power_ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    num_safe = np.maximum(numerator, np.finfo(np.float64).tiny)
+    den_safe = np.maximum(denominator, np.finfo(np.float64).tiny)
+    return np.log10(num_safe / den_safe)
+
+
 def percentile_levels(values: np.ndarray, low: float, high: float, count: int) -> np.ndarray:
     vmin = np.nanpercentile(values, low)
     vmax = np.nanpercentile(values, high)
@@ -666,12 +688,21 @@ def plot_me_rp_comparison(
 
     me_power = me_result["power_ens"]
     rp_power = rp_result["power_ens"]
-    me_values, colorbar_label, title_extra = plot_values(
-        me_power, plot_mode, args.smooth_passes, args.background_method
-    )
-    rp_values, _, _ = plot_values(
-        rp_power, plot_mode, args.smooth_passes, args.background_method
-    )
+    if plot_mode == "normalized" and args.comparison_background == "shared":
+        shared_bg = background_spectrum(
+            0.5 * (me_power + rp_power), args.smooth_passes, args.background_method
+        )
+        me_values = normalized_with_background(me_power, shared_bg)
+        rp_values = normalized_with_background(rp_power, shared_bg)
+        colorbar_label = "log10(power / shared background)"
+        title_extra = f"shared {args.background_method} background"
+    else:
+        me_values, colorbar_label, title_extra = plot_values(
+            me_power, plot_mode, args.smooth_passes, args.background_method
+        )
+        rp_values, _, _ = plot_values(
+            rp_power, plot_mode, args.smooth_passes, args.background_method
+        )
     me_values = smooth_plot_field(me_values, args.plot_smooth_passes)
     rp_values = smooth_plot_field(rp_values, args.plot_smooth_passes)
     combined = np.concatenate([me_values.ravel(), rp_values.ravel()])
@@ -691,8 +722,13 @@ def plot_me_rp_comparison(
         common_extend = "both"
 
     if plot_mode == "normalized":
-        diff = me_values - rp_values
-        diff_label = "ME - RP log10(power / background)"
+        if args.comparison_background == "shared":
+            diff = log_power_ratio(me_power, rp_power)
+            diff = smooth_plot_field(diff, args.plot_smooth_passes)
+            diff_label = "log10(ME / RP)"
+        else:
+            diff = me_values - rp_values
+            diff_label = "ME - RP log10(power / background)"
     else:
         diff = me_power - rp_power
         diff = smooth_plot_field(diff, args.plot_smooth_passes)
