@@ -262,7 +262,25 @@ def parse_args() -> argparse.Namespace:
         default=0.05,
         help=(
             "Paired-member p-value threshold for showing ME/RP differences in "
-            "panel C. Use with --no-diff-significance to show all differences."
+            "panel C when --diff-significance-test ttest is used."
+        ),
+    )
+    parser.add_argument(
+        "--diff-significance-test",
+        choices=("agreement", "ttest"),
+        default="agreement",
+        help=(
+            "How panel C is masked. 'agreement' keeps bins where most paired "
+            "members agree on the ME/RP sign; 'ttest' uses a paired t-test."
+        ),
+    )
+    parser.add_argument(
+        "--diff-significance-fraction",
+        type=float,
+        default=0.8,
+        help=(
+            "Minimum paired-member sign agreement for panel C when "
+            "--diff-significance-test agreement is used."
         ),
     )
     parser.add_argument(
@@ -784,10 +802,16 @@ def add_colorbar(
         cbar.set_ticklabels([f"{tick:g}" for tick in ticks])
 
 
-def plot_cmap(name: str, masked_color: str | None = None) -> object:
+def plot_cmap(
+    name: str,
+    masked_color: str | None = None,
+    under_color: str | None = None,
+) -> object:
     cmap = plt.get_cmap(name).copy()
     if masked_color is not None:
         cmap.set_bad(masked_color)
+    if under_color is not None:
+        cmap.set_under(under_color)
     return cmap
 
 
@@ -865,7 +889,9 @@ def paired_log_power_significance(
     me_result: dict[str, object],
     rp_result: dict[str, object],
     alpha: float,
-) -> tuple[np.ndarray, list[str]]:
+    test: str,
+    min_fraction: float,
+) -> tuple[np.ndarray, list[str], str]:
     me_members = [str(member) for member in me_result["members"]]
     rp_members = [str(member) for member in rp_result["members"]]
     rp_lookup = {member_suffix(member): index for index, member in enumerate(rp_members)}
@@ -876,13 +902,21 @@ def paired_log_power_significance(
     ]
     if len(pairs) < 2:
         shape = me_result["power_ens"].shape
-        return np.zeros(shape, dtype=bool), [pair[0] for pair in pairs]
+        return np.zeros(shape, dtype=bool), [pair[0] for pair in pairs], "insufficient pairs"
 
     me_power = np.asarray(me_result["member_power"])[[pair[1] for pair in pairs], :, :]
     rp_power = np.asarray(rp_result["member_power"])[[pair[2] for pair in pairs], :, :]
     tiny = np.finfo(np.float64).tiny
     paired_diff = np.log10(np.maximum(me_power, tiny)) - np.log10(np.maximum(rp_power, tiny))
     n_members = paired_diff.shape[0]
+    if test == "agreement":
+        pos_fraction = np.mean(paired_diff > 0.0, axis=0)
+        neg_fraction = np.mean(paired_diff < 0.0, axis=0)
+        agreement = np.maximum(pos_fraction, neg_fraction)
+        mask = agreement >= min(1.0, max(0.0, min_fraction))
+        description = f"paired sign agreement >= {min_fraction:g}"
+        return mask, [pair[0] for pair in pairs], description
+
     mean_diff = np.mean(paired_diff, axis=0)
     std_diff = np.std(paired_diff, axis=0, ddof=1)
     stderr = std_diff / math.sqrt(n_members)
@@ -899,7 +933,11 @@ def paired_log_power_significance(
         vectorized_erfc = np.vectorize(math.erfc)
         p_values = vectorized_erfc(np.abs(t_stat) / math.sqrt(2.0))
 
-    return np.isfinite(p_values) & (p_values < alpha), [pair[0] for pair in pairs]
+    return (
+        np.isfinite(p_values) & (p_values < alpha),
+        [pair[0] for pair in pairs],
+        f"paired log-power t-test, p < {alpha:g}",
+    )
 
 
 def smooth_plot_field(values: np.ndarray, passes: int) -> np.ndarray:
@@ -1045,6 +1083,9 @@ def plot_me_rp_comparison(
             args.normalized_levels,
             args.level_percentile,
         )
+        if args.normalized_scale == "ratio":
+            common_levels = np.linspace(0.75, 2.0, 21)
+            common_extend = "both"
     else:
         low = max(0.0, 100.0 - args.level_percentile)
         common_levels = percentile_levels(combined, low, args.level_percentile, 21)
@@ -1089,16 +1130,23 @@ def plot_me_rp_comparison(
         diff_extend = "both"
 
     if not args.no_diff_significance:
-        sig_mask, matched_members = paired_log_power_significance(
-            me_result, rp_result, args.diff_significance_alpha
+        sig_mask, matched_members, sig_description = paired_log_power_significance(
+            me_result,
+            rp_result,
+            args.diff_significance_alpha,
+            args.diff_significance_test,
+            args.diff_significance_fraction,
         )
         if len(matched_members) < 2:
             print("  warning: fewer than 2 matched ME/RP members; panel C is fully masked")
         else:
+            visible_sig = values_in_frequency_range(sig_mask.astype(float), freqs, ylim)
+            visible_count = int(np.count_nonzero(visible_sig))
+            total_count = int(visible_sig.size)
             print(
                 "  Panel C significance mask: "
-                f"paired log-power t-test, n={len(matched_members)}, "
-                f"p < {args.diff_significance_alpha:g}"
+                f"{sig_description}, n={len(matched_members)}, "
+                f"visible bins {visible_count}/{total_count}"
             )
         diff = np.where(sig_mask, diff, np.nan)
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
@@ -1115,7 +1163,7 @@ def plot_me_rp_comparison(
             )
             diff_cmap = "RdBu_r"
             diff_extend = "both"
-        diff_label = f"{diff_label}, p < {args.diff_significance_alpha:g}"
+        diff_label = f"{diff_label}, {sig_description}"
 
     fig, axes = plt.subplots(1, 3, figsize=(19.5, 5.8), sharey=True)
     panels = (
@@ -1127,12 +1175,19 @@ def plot_me_rp_comparison(
     for ax, (title, values, levels, cmap, extend, cbar_label) in zip(axes, panels):
         masked_values = np.ma.masked_invalid(values)
         masked_color = "#f2f2f2" if title == "ME - RP" else None
+        under_color = (
+            "#ffffff"
+            if title in {"ME", "RP"}
+            and plot_mode == "normalized"
+            and args.normalized_scale == "ratio"
+            else None
+        )
         mesh = ax.contourf(
             ks,
             freqs,
             masked_values,
             levels=levels,
-            cmap=plot_cmap(cmap, masked_color),
+            cmap=plot_cmap(cmap, masked_color, under_color),
             extend=extend,
         )
         cbar_pad = 0.12 if title == "ME - RP" else 0.04
