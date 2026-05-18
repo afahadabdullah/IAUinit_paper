@@ -834,6 +834,10 @@ def ratio_percentile_levels(values: np.ndarray, percentile: float, count: int) -
     return 10.0 ** np.linspace(-limit, limit, count)
 
 
+def ratio_difference_levels() -> np.ndarray:
+    return np.round(np.arange(-0.4, 0.4001, 0.05), 2)
+
+
 def normalized_plot_levels(
     values: np.ndarray,
     normalized_scale: str,
@@ -1217,7 +1221,7 @@ def plot_me_rp_comparison(
         if args.normalized_scale == "ratio":
             diff = me_values - rp_values
             diff_label = "A - B"
-            diff_levels = np.array([-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4])
+            diff_levels = ratio_difference_levels()
             diff_cmap = "RdBu_r"
             diff_extend = "both"
         elif args.comparison_background == "shared":
@@ -1271,7 +1275,7 @@ def plot_me_rp_comparison(
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
         if plot_mode == "normalized":
             if args.normalized_scale == "ratio":
-                diff_levels = np.array([-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4])
+                diff_levels = ratio_difference_levels()
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
@@ -1344,24 +1348,23 @@ def plot_me_rp_comparison(
 
     for i, (ax, (title, values, levels, cmap, extend, cbar_label)) in enumerate(zip(ax_list, panels)):
         masked_values = np.ma.masked_invalid(values)
+        ratio_mode = plot_mode == "normalized" and args.normalized_scale == "ratio"
         if (
             i in (0, 1, 3)
-            and plot_mode == "normalized"
-            and args.normalized_scale == "ratio"
+            and ratio_mode
         ):
             masked_values = np.ma.masked_where(values < 1.0, masked_values)
+        if i == 2 and ratio_mode:
+            masked_values = np.ma.masked_where(np.abs(values) <= 0.1, masked_values)
         masked_color = (
             "#ffffff"
-            if i in (0, 1, 3)
-            and plot_mode == "normalized"
-            and args.normalized_scale == "ratio"
+            if (i in (0, 1, 3) and ratio_mode) or (i == 2 and ratio_mode)
             else "#f2f2f2" if i == 2 else None
         )
         under_color = (
             "#ffffff"
             if i in (0, 1, 3)
-            and plot_mode == "normalized"
-            and args.normalized_scale == "ratio"
+            and ratio_mode
             else None
         )
         mesh = ax.contourf(
