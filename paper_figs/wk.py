@@ -1335,7 +1335,7 @@ def plot_me_rp_comparison(
     panels = [
         ("(a) Dynamically Imbalanced", me_values, common_levels, common_cmap, common_extend, colorbar_label),
         ("(b) Dynamically Balanced", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
-        ("(c) Dynamically Imbalanced - Balanced", diff, diff_levels, diff_cmap, diff_extend, diff_label),
+        ("(c) Dynamically Imbalanced - Balanced", diff, diff_levels, diff_cmap, diff_extend, ""),
     ]
     if spike_panel is not None:
         panels.append(spike_panel)
@@ -1372,7 +1372,7 @@ def plot_me_rp_comparison(
             cmap=plot_cmap(cmap, masked_color, under_color),
             extend=extend,
         )
-        cbar_pad = 0.20
+        cbar_pad = 0.08
         add_colorbar(
             fig,
             mesh,
