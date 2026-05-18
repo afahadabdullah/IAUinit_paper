@@ -28,6 +28,10 @@ CAPE_VARS = ("CAPE", "T", "OMEGA")
 SURF_VARS = ("SHFX", "TA", "TS_FOUND", "PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
 
 
+def progress(message: str) -> None:
+    print(f"[wp_diag] {message}", flush=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Plot Western Tropical Pacific CAPE, omega, flux, SST, and precipitation diagnostics."
@@ -114,6 +118,7 @@ def collection_files(
         files.append(str(path))
     if not files:
         raise FileNotFoundError(f"No files found for {exp} {collection}: {pattern}")
+    progress(f"{exp} {collection}: found {len(files)} files in {month} for {start} to {end}")
     return files
 
 
@@ -152,6 +157,7 @@ def open_collection(
     time_chunk: int,
 ) -> xr.Dataset:
     files = collection_files(base_dir, exp, collection, month, start, end)
+    progress(f"{exp} {collection}: opening lazily with variables {', '.join(variables)}")
     ds = xr.open_mfdataset(
         files,
         combine="by_coords",
@@ -208,6 +214,7 @@ def load_case(
     lon: float,
     time_chunk: int,
 ) -> dict[str, xr.DataArray]:
+    progress(f"{exp}: loading point diagnostics near lat={lat}, lon={lon}")
     cape_ds = open_collection(
         base_dir, exp, "geosgcm_cape", month, start, end, CAPE_VARS, lat, lon, time_chunk
     )
@@ -216,6 +223,7 @@ def load_case(
     )
 
     try:
+        progress(f"{exp}: computing CAPE, omega, temperature, flux, SST, and precipitation time series")
         cape = point_series(cape_ds["CAPE"]).compute()
         temp = point_series(cape_ds["T"]).compute()
         omega = point_series(cape_ds["OMEGA"]).compute()
@@ -230,6 +238,8 @@ def load_case(
     finally:
         cape_ds.close()
         surf_ds.close()
+
+    progress(f"{exp}: finished processed point time series")
 
     return {
         "cape": cape,
@@ -297,11 +307,14 @@ def dataset_to_cases(ds: xr.Dataset) -> dict[str, dict[str, xr.DataArray]]:
 def load_or_compute_cases(args: argparse.Namespace) -> dict[str, dict[str, xr.DataArray]]:
     cache_file = args.cache_file or default_cache_file(args.output)
     if not args.no_cache and cache_file.exists() and not args.recompute_cache:
+        progress(f"Checking cache: {cache_file}")
         with xr.open_dataset(cache_file) as cached:
             if cache_matches(cached, args):
-                print(f"Using cached processed point data: {cache_file}")
+                progress(f"Using cached processed point data: {cache_file}")
                 return dataset_to_cases(cached.load())
-        print(f"Cache metadata differs from requested options; recomputing: {cache_file}")
+        progress(f"Cache metadata differs from requested options; recomputing {cache_file}")
+
+    progress("Cache miss or recompute requested; reading source NetCDF files")
 
     imbalanced = load_case(
         args.base_dir,
@@ -326,10 +339,11 @@ def load_or_compute_cases(args: argparse.Namespace) -> dict[str, dict[str, xr.Da
     cases = {"imbalanced": imbalanced, "balanced": balanced}
 
     if not args.no_cache:
+        progress(f"Writing processed cache: {cache_file}")
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_ds = cases_to_dataset(cases, args)
         cache_ds.to_netcdf(cache_file, encoding=cache_encoding(cache_ds, args))
-        print(f"Saved processed point cache: {cache_file}")
+        progress(f"Saved processed point cache: {cache_file}")
 
     return cases
 
@@ -437,6 +451,7 @@ def plot_figure(
     balanced: dict[str, xr.DataArray],
     output: Path,
 ) -> None:
+    progress(f"Plotting figure to {output}")
     fig = plt.figure(figsize=(12, 8))
     fig.text(
         0.025,
@@ -478,10 +493,15 @@ def plot_figure(
 def main() -> None:
     args = parse_args()
     dask.config.set(scheduler="synchronous")
+    progress(
+        "Starting WP diagnostic: "
+        f"{args.imbalanced_exp} vs {args.balanced_exp}, "
+        f"{args.start} to {args.end}, lat={args.lat}, lon={args.lon}"
+    )
 
     cases = load_or_compute_cases(args)
     plot_figure(cases["imbalanced"], cases["balanced"], args.output)
-    print(f"Saved {args.output}")
+    progress(f"Saved {args.output}")
 
 
 if __name__ == "__main__":
