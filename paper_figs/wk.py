@@ -1178,8 +1178,8 @@ def plot_me_rp_comparison(
             args.level_percentile,
         )
         if args.normalized_scale == "ratio":
-            common_levels = np.linspace(0.8, 1.5, 15)
-            common_extend = "both"
+            common_levels = np.linspace(1.0, 1.5, 11)
+            common_extend = "max"
     else:
         low = max(0.0, 100.0 - args.level_percentile)
         common_levels = percentile_levels(combined, low, args.level_percentile, 21)
@@ -1188,40 +1188,31 @@ def plot_me_rp_comparison(
     common_cmap = "YlOrRd"
  
     if plot_mode == "normalized":
-        if args.comparison_background == "shared":
-            if args.normalized_scale == "ratio":
-                diff = log2_power_ratio(me_power, rp_power)
-                diff = smooth_plot_field(diff, args.plot_smooth_passes)
-                diff_label = "log2(ME / RP power)"
-                diff_levels = np.array([-0.75, -0.5, -0.25, -.1, .1, 0.25, 0.5, 0.75 ])
-                diff_cmap = "RdBu_r"
-                diff_extend = "both"
-            else:
-                diff = power_ratio(me_power, rp_power, args.normalized_scale)
-                diff = smooth_plot_field(diff, args.plot_smooth_passes)
-                diff_label = "log10(ME / RP)"
-                diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
-                    values_in_frequency_range(diff, freqs, ylim),
-                    args.normalized_scale,
-                    "adaptive",
-                    args.level_percentile,
-                )
+        if args.normalized_scale == "ratio":
+            diff = me_values - rp_values
+            diff_label = "A - B"
+            diff_levels = np.linspace(-0.5, 0.5, 11)
+            diff_cmap = "RdBu_r"
+            diff_extend = "both"
+        elif args.comparison_background == "shared":
+            diff = power_ratio(me_power, rp_power, args.normalized_scale)
+            diff = smooth_plot_field(diff, args.plot_smooth_passes)
+            diff_label = "log10(ME / RP)"
+            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                values_in_frequency_range(diff, freqs, ylim),
+                args.normalized_scale,
+                "adaptive",
+                args.level_percentile,
+            )
         else:
-            if args.normalized_scale == "ratio":
-                diff = log2_power_ratio(me_values, rp_values)
-                diff_label = "log2(ME / RP normalized ratio)"
-                diff_levels = np.array([-0.75, -0.5, -0.25, -.1, .1, 0.25, 0.5, 0.75 ])
-                diff_cmap = "RdBu_r"
-                diff_extend = "both"
-            else:
-                diff = me_values - rp_values
-                diff_label = "ME - RP log10(power / background)"
-                diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
-                    values_in_frequency_range(diff, freqs, ylim),
-                    args.normalized_scale,
-                    "adaptive",
-                    args.level_percentile,
-                )
+            diff = me_values - rp_values
+            diff_label = "ME - RP log10(power / background)"
+            diff_levels, diff_cmap, diff_extend = normalized_plot_levels(
+                values_in_frequency_range(diff, freqs, ylim),
+                args.normalized_scale,
+                "adaptive",
+                args.level_percentile,
+            )
     else:
         diff = me_power - rp_power
         diff = smooth_plot_field(diff, args.plot_smooth_passes)
@@ -1254,7 +1245,7 @@ def plot_me_rp_comparison(
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
         if plot_mode == "normalized":
             if args.normalized_scale == "ratio":
-                diff_levels = np.array([-0.5, -0.4, -0.3, -0.2, -.1, .1, .2, .3, .4, .5])
+                diff_levels = np.linspace(-0.5, 0.5, 11)
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
@@ -1328,11 +1319,11 @@ def plot_me_rp_comparison(
     for i, (ax, (title, values, levels, cmap, extend, cbar_label)) in enumerate(zip(ax_list, panels)):
         masked_values = np.ma.masked_invalid(values)
         if (
-            i in (0, 1)
+            i in (0, 1, 3)
             and plot_mode == "normalized"
             and args.normalized_scale == "ratio"
         ):
-            masked_values = np.ma.masked_where(values < 0.9, masked_values)
+            masked_values = np.ma.masked_where(values < 1.0, masked_values)
         masked_color = (
             "#ffffff"
             if i in (0, 1, 3)
