@@ -1318,7 +1318,7 @@ def plot_me_rp_comparison(
     panels = [
         ("(a) Dynamically Imbalanced", me_values, common_levels, common_cmap, common_extend, colorbar_label),
         ("(b) Dynamically Balanced", rp_values, common_levels, common_cmap, common_extend, colorbar_label),
-        ("(c) Dynamically Imbalanced - Balanced", diff, diff_levels, diff_cmap, diff_extend, "power / background"),
+        ("(c) Dynamically Imbalanced - Balanced", diff, diff_levels, diff_cmap, diff_extend, diff_label),
     ]
     if spike_panel is not None:
         panels.append(spike_panel)
