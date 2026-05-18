@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -693,8 +694,8 @@ def add_mode_labels(ax: plt.Axes) -> None:
     x_min, x_max = ax.get_xlim()
     y_min, y_max = ax.get_ylim()
     labels = (
-        ("MJO", 2.2, 1.0 / 45.0),
-        ("CCKW", 6.5, 1.0 / 10.0),
+        ("MJO", 4.0, 1.0 / 55.0),
+        ("CCKW", 10.0, 1.0 / 7.0),
     )
     for text, x_pos, y_pos in labels:
         if x_min <= x_pos <= x_max and y_min <= y_pos <= y_max:
@@ -707,7 +708,9 @@ def add_mode_labels(ax: plt.Axes) -> None:
                 color="k",
                 ha="center",
                 va="center",
-                bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none", "pad": 1.8},
+                path_effects=[
+                    path_effects.withStroke(linewidth=2.5, foreground="white")
+                ],
             )
 
 
@@ -1214,7 +1217,7 @@ def plot_me_rp_comparison(
         if args.normalized_scale == "ratio":
             diff = me_values - rp_values
             diff_label = "A - B"
-            diff_levels = np.linspace(-0.5, 0.5, 11)
+            diff_levels = np.array([-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4])
             diff_cmap = "RdBu_r"
             diff_extend = "both"
         elif args.comparison_background == "shared":
@@ -1268,7 +1271,7 @@ def plot_me_rp_comparison(
         visible_diff = values_in_frequency_range(diff, freqs, ylim)
         if plot_mode == "normalized":
             if args.normalized_scale == "ratio":
-                diff_levels = np.linspace(-0.5, 0.5, 11)
+                diff_levels = np.array([-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4])
                 diff_cmap = "RdBu_r"
                 diff_extend = "both"
             else:
