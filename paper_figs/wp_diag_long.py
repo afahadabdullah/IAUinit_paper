@@ -457,24 +457,24 @@ def plot_figure(
     progress(f"Plotting figure to {output}")
     fig = plt.figure(figsize=(12, 6))
     fig.text(
-        0.025,
+        0.030,
         0.75,
         "Dynamically Imbalanced",
         va="center",
         ha="center",
         rotation="vertical",
-        fontsize=13,
+        fontsize=10,
         fontweight="bold",
         color="blue",
     )
     fig.text(
-        0.025,
+        0.030,
         0.25,
         "Dynamically Balanced",
         va="center",
         ha="center",
         rotation="vertical",
-        fontsize=13,
+        fontsize=10,
         fontweight="bold",
         color="orange",
     )
@@ -487,7 +487,7 @@ def plot_figure(
     plot_heat_fluxes(plt.subplot(2, 3, 5), balanced, "(e) Heat Fluxes")
     plot_omega_cape_precip(plt.subplot(2, 3, 6), balanced, "(f) Omega500, CAPE, and Precip")
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0.09, 0.03, 0.88, 0.97], w_pad=2.0, h_pad=1.2)
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=200)
     plt.close(fig)
