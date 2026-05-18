@@ -416,7 +416,7 @@ def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: s
     ax.set_title(title, fontsize=12, fontweight="bold")
     color1 = "green"
     color2 = "darkblue"
-    color3 = "firebrick"
+    color3 = "0.45"
 
     line1 = line(ax, case["cape"], color=color1, label="CAPE")
     ax.set_ylabel("CAPE J kg-1", color=color1)
@@ -431,19 +431,21 @@ def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: s
     ax2.set_ylim(-1.2, 2.1)
 
     ax3 = ax.twinx()
-    ax3.spines["right"].set_position(("axes", 1.18))
+    ax3.spines["right"].set_position(("axes", 1.28))
+    ax3.spines["right"].set_color(color3)
     line3 = line(
         ax3,
         case["precip"],
         color=color3,
         label="Precip",
         linewidth=1.6,
+        alpha=0.55,
     )
     ax3.set_ylabel("Precip (mm day-1)", color=color3)
     ax3.tick_params(axis="y", labelcolor=color3)
 
     lines = line1 + line2 + line3
-    ax.legend(lines, [line.get_label() for line in lines], loc="best")
+    ax.legend(lines, [line.get_label() for line in lines], loc="upper right")
 
 
 def plot_figure(
@@ -484,7 +486,7 @@ def plot_figure(
     plot_heat_fluxes(plt.subplot(2, 3, 5), balanced, "(e) Heat Fluxes")
     plot_omega_cape_precip(plt.subplot(2, 3, 6), balanced, "(f) Omega500, CAPE, and Precip")
 
-    plt.tight_layout(rect=[0.06, 0, 0.90, 0.96])
+    plt.tight_layout(rect=[0.06, 0, 0.86, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=200)
     plt.close(fig)
