@@ -689,6 +689,28 @@ def add_dispersion_curves(ax: plt.Axes, fmin: float, fmax: float) -> None:
             ax.text(kk[mask][0], ff[mask][0], f"{depth}m", fontsize=8)
 
 
+def add_mode_labels(ax: plt.Axes) -> None:
+    x_min, x_max = ax.get_xlim()
+    y_min, y_max = ax.get_ylim()
+    labels = (
+        ("MJO", 2.2, 1.0 / 45.0),
+        ("CCKW", 6.5, 1.0 / 10.0),
+    )
+    for text, x_pos, y_pos in labels:
+        if x_min <= x_pos <= x_max and y_min <= y_pos <= y_max:
+            ax.text(
+                x_pos,
+                y_pos,
+                text,
+                fontsize=12,
+                fontweight="bold",
+                color="k",
+                ha="center",
+                va="center",
+                bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none", "pad": 1.8},
+            )
+
+
 def plot_values(
     power: np.ndarray,
     plot_mode: str,
@@ -1091,6 +1113,7 @@ def plot_wk(
     ax.set_xlim(float(ks.min()), float(ks.max()))
     ax.set_ylim(*ylim)
     add_period_axis(ax)
+    add_mode_labels(ax)
     ax.grid(alpha=0.25)
 
     fig.subplots_adjust(left=0.09, right=0.86, bottom=0.10, top=0.92)
@@ -1369,6 +1392,7 @@ def plot_me_rp_comparison(
         ax.grid(alpha=0.25)
         
         add_period_axis(ax)
+        add_mode_labels(ax)
 
     ax_list[0].set_ylabel("Frequency (cycles day$^{-1}$)")
     ax_list[2].set_ylabel("Frequency (cycles day$^{-1}$)")
