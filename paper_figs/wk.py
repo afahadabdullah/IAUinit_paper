@@ -965,12 +965,18 @@ def scale_westward_values(
     return scaled
 
 
-def add_period_axis(ax: plt.Axes, label: bool = True) -> None:
+def add_period_axis(
+    ax: plt.Axes,
+    label: bool = True,
+    labelpad: float = -7.0,
+    tick_pad: float = -1.0,
+) -> None:
     secax = ax.secondary_yaxis(
         "right", functions=(frequency_to_period, period_to_frequency)
     )
     if label:
-        secax.set_ylabel("Period (days per cycle)")
+        secax.set_ylabel("Period (days per cycle)", labelpad=labelpad)
+    secax.tick_params(axis="y", pad=tick_pad)
     ymin, ymax = ax.get_ylim()
     period_low = min(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
     period_high = max(float(frequency_to_period(ymin)), float(frequency_to_period(ymax)))
@@ -1375,7 +1381,7 @@ def plot_me_rp_comparison(
             cmap=plot_cmap(cmap, masked_color, under_color),
             extend=extend,
         )
-        cbar_pad = 0.08
+        cbar_pad = 0.14
         add_colorbar(
             fig,
             mesh,
@@ -1403,7 +1409,7 @@ def plot_me_rp_comparison(
     ax_list[0].set_ylabel("Frequency (cycles day$^{-1}$)")
     ax_list[2].set_ylabel("Frequency (cycles day$^{-1}$)")
     
-    fig.tight_layout()
+    fig.tight_layout(pad=0.8, w_pad=2.0, h_pad=1.6)
     fig.savefig(output_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
