@@ -10,7 +10,10 @@ import csv
 import glob
 from pathlib import Path
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 import xarray as xr
 
 import mse_budget as mb
@@ -31,6 +34,15 @@ POINT_STENCIL_COUNT = 3
 CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
 EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_summary.csv")
+MEAN_FIGURE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_budget.png")
+STORY_FIGURE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_story.png")
+
+PLOT_COMPONENTS = [
+    ("precip_mm", r"$\int P\,dt$"),
+    ("evap_mm", r"$\int E\,dt$"),
+    ("mc_direct_mm", r"$\int MC_{\mathrm{direct}}\,dt$"),
+    ("storage_mm", r"$-\Delta W$"),
+]
 
 U_CANDIDATES = ("U", "UWND", "UGRD", "ua")
 V_CANDIDATES = ("V", "VWND", "VGRD", "va")
@@ -441,6 +453,289 @@ def write_csv(path, rows, fieldnames):
             writer.writerow(row)
 
 
+def paired_wilcoxon_pvalue(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size <= 1:
+        return np.nan
+    if np.allclose(values, 0.0):
+        return 1.0
+    nonzero = values[~np.isclose(values, 0.0)]
+    if nonzero.size <= 1:
+        return 1.0
+    return float(
+        stats.wilcoxon(
+            values,
+            zero_method="wilcox",
+            alternative="two-sided",
+            method="auto",
+        ).pvalue
+    )
+
+
+def sample_sem(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size <= 1:
+        return 0.0
+    return float(np.nanstd(values, ddof=1) / np.sqrt(values.size))
+
+
+def plot_ylim_from_values(values, errors=None, pad_fraction=0.16):
+    values = np.asarray(values, dtype=float)
+    finite = [0.0]
+    if errors is None:
+        errors = np.zeros_like(values)
+    errors = np.asarray(errors, dtype=float)
+    for value, err in zip(values, errors):
+        finite.extend([value - err, value + err])
+    finite = np.asarray(finite, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    ymin = float(np.nanmin(finite))
+    ymax = float(np.nanmax(finite))
+    span = max(ymax - ymin, 1.0)
+    pad = max(0.6, pad_fraction * span)
+    return ymin - pad, ymax + pad
+
+
+def summarize_plot_components(me_rows, rp_rows):
+    summary = []
+    for key, label in PLOT_COMPONENTS:
+        me_vals = np.array([row[key] for row in me_rows], dtype=float)
+        rp_vals = np.array([row[key] for row in rp_rows], dtype=float)
+        diff_vals = me_vals - rp_vals
+        summary.append(
+            {
+                "component_key": key,
+                "component_label": label,
+                "n_events": int(diff_vals.size),
+                "rean_mean_mm": float(np.nanmean(me_vals)),
+                "rean_sem_mm": sample_sem(me_vals),
+                "iau_mean_mm": float(np.nanmean(rp_vals)),
+                "iau_sem_mm": sample_sem(rp_vals),
+                "diff_mean_mm": float(np.nanmean(diff_vals)),
+                "diff_sem_mm": sample_sem(diff_vals),
+                "pvalue": paired_wilcoxon_pvalue(diff_vals),
+            }
+        )
+    return summary
+
+
+def plot_mean_budget(me_rows, rp_rows):
+    summary = summarize_plot_components(me_rows, rp_rows)
+    labels = [row["component_label"] for row in summary]
+    x = np.arange(len(labels))
+    width = 0.42
+    pair_offset = 0.24
+
+    rean_mean = np.array([row["rean_mean_mm"] for row in summary], dtype=float)
+    iau_mean = np.array([row["iau_mean_mm"] for row in summary], dtype=float)
+    rean_sem = np.array([row["rean_sem_mm"] for row in summary], dtype=float)
+    iau_sem = np.array([row["iau_sem_mm"] for row in summary], dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6.5))
+    fig.subplots_adjust(wspace=0.25)
+
+    ax = axes[0]
+    ax.bar(
+        x - pair_offset,
+        rean_mean,
+        width=width,
+        color="navy",
+        alpha=0.9,
+        yerr=rean_sem,
+        capsize=4,
+        label="Dynamically Imbalanced",
+    )
+    ax.bar(
+        x + pair_offset,
+        iau_mean,
+        width=width,
+        color="darkorange",
+        alpha=0.9,
+        yerr=iau_sem,
+        capsize=4,
+        label="Dynamically Balanced",
+    )
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(f"mm per {EVENT_WINDOW_HOURS:g}-h spike window")
+    ax.set_title("(a) WTP mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
+    ax.legend(loc="upper left", frameon=False)
+    ax.set_ylim(*plot_ylim_from_values(np.r_[rean_mean, iau_mean], np.r_[rean_sem, iau_sem]))
+
+    ax = axes[1]
+    diff_mean = np.array([row["diff_mean_mm"] for row in summary], dtype=float)
+    diff_sem = np.array([row["diff_sem_mm"] for row in summary], dtype=float)
+    colors = ["black", "tab:blue", "tab:green", "tab:purple"]
+    bars = ax.bar(x, diff_mean, width=width, color=colors, alpha=0.88, yerr=diff_sem, capsize=4)
+    bars[-1].set_hatch("//")
+    bars[-1].set_edgecolor("firebrick")
+    bars[-1].set_linewidth(1.3)
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(f"Difference [mm per {EVENT_WINDOW_HOURS:g}-h spike window]")
+    ax.set_title("(b) Mean difference (imbalanced - balanced)", loc="left", fontweight="bold", fontsize=12)
+
+    ymin, ymax = plot_ylim_from_values(diff_mean, diff_sem, pad_fraction=0.22)
+    ax.set_ylim(ymin, ymax)
+    inset = max(0.35, 0.04 * (ymax - ymin))
+    label_pad = max(0.35, 0.04 * (ymax - ymin))
+    for xpos, row, value, err in zip(x, summary, diff_mean, diff_sem):
+        yloc = value + err + label_pad if value >= 0.0 else value - err - label_pad
+        yloc = float(np.clip(yloc, ymin + inset, ymax - inset))
+        ax.text(xpos, yloc, f"p={row['pvalue']:.3f}", ha="center", va="center", fontsize=9, clip_on=True)
+
+    for ax in axes:
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.tick_params(axis="both", labelsize=10)
+
+    fig.tight_layout()
+    plt.savefig(MEAN_FIGURE_PATH, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Mean WTP direct-MC budget figure saved to {MEAN_FIGURE_PATH}")
+
+
+def annotate_bar_values(ax, bars, values):
+    ymin, ymax = ax.get_ylim()
+    pad = 0.025 * max(ymax - ymin, 1.0)
+    for bar, value in zip(bars, values):
+        if value >= 0.0:
+            yloc = value + pad
+            va = "bottom"
+        else:
+            yloc = value - pad
+            va = "top"
+        ax.text(
+            bar.get_x() + bar.get_width() * 0.5,
+            yloc,
+            f"{value:.1f}",
+            ha="center",
+            va=va,
+            fontsize=9,
+            clip_on=True,
+        )
+
+
+def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows):
+    if len(spike_indices) == 0:
+        print("Skipping story figure because no WTP spikes were detected.")
+        return
+
+    spike_values = np.asarray(me_detect["Precip"].isel(time=spike_indices).values, dtype=float)
+    dominant_position = int(np.nanargmax(spike_values))
+    dominant_idx = int(spike_indices[dominant_position])
+    me_event = me_rows[dominant_position]
+    rp_event = rp_rows[dominant_position]
+    diff_event = {key: me_event[key] - rp_event[key] for key, _ in PLOT_COMPONENTS}
+
+    time_values = me_detect.time.values
+    half_steps = mb.half_window_steps_from_hours(me_detect, EVENT_WINDOW_HOURS)
+    event_start_idx = max(dominant_idx - half_steps, 0)
+    event_end_idx = min(dominant_idx + half_steps, len(time_values) - 1)
+    event_start = time_values[event_start_idx]
+    event_end = time_values[event_end_idx]
+
+    dt_hours = mb.infer_time_step_hours(me_detect)
+    context_steps = max(1, int(round(12.0 / max(dt_hours, 1.0e-6))))
+    plot_start = time_values[max(event_start_idx - context_steps, 0)]
+    plot_end = time_values[min(event_end_idx + context_steps, len(time_values) - 1)]
+
+    fig, axes = plt.subplots(3, 1, figsize=(11.5, 11.0), sharex=False)
+    fig.subplots_adjust(hspace=0.30, top=0.93)
+    fig.suptitle(
+        "WTP direct-MC moisture budget of the dominant precipitation spike",
+        fontsize=15,
+        y=0.985,
+    )
+
+    ax = axes[0]
+    ax.axvspan(event_start, event_end, color="0.86", alpha=0.55, linewidth=0)
+    me_focus = me_detect.sel(time=slice(plot_start, plot_end))
+    rp_focus = rp_detect.sel(time=slice(plot_start, plot_end))
+    ax.plot(
+        me_focus.time.values,
+        me_focus["Precip"] * SECONDS_PER_DAY,
+        color="navy",
+        linewidth=2.8,
+        label="Dynamically Imbalanced",
+    )
+    ax.plot(
+        rp_focus.time.values,
+        rp_focus["Precip"] * SECONDS_PER_DAY,
+        color="darkorange",
+        linewidth=2.3,
+        label="Dynamically Balanced",
+    )
+    ax.scatter(
+        [time_values[dominant_idx]],
+        [float(me_detect["Precip"].isel(time=dominant_idx) * SECONDS_PER_DAY)],
+        color="navy",
+        s=34,
+        zorder=5,
+    )
+    ax.annotate(
+        me_event["event_id"],
+        (time_values[dominant_idx], float(me_detect["Precip"].isel(time=dominant_idx) * SECONDS_PER_DAY)),
+        xytext=(0, 8),
+        textcoords="offset points",
+        ha="center",
+        fontsize=10,
+    )
+    ax.set_xlim(plot_start, plot_end)
+    ax.set_ylabel(r"$P$ [mm day$^{-1}$]")
+    ax.set_title("(a) Precipitation time series", loc="left", fontweight="bold")
+    ax.legend(loc="upper right", ncol=2, frameon=False, fontsize=10)
+
+    labels = [label for _, label in PLOT_COMPONENTS]
+    x = np.arange(len(labels))
+    colors = ["black", "tab:blue", "tab:green", "tab:purple"]
+
+    ax = axes[1]
+    me_values = np.array([me_event[key] for key, _ in PLOT_COMPONENTS], dtype=float)
+    bars = ax.bar(x, me_values, color=colors, alpha=0.88, width=0.72, edgecolor="none")
+    bars[-1].set_hatch("//")
+    bars[-1].set_edgecolor("firebrick")
+    bars[-1].set_linewidth(1.3)
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_ylabel(f"mm per {EVENT_WINDOW_HOURS:g}-h spike window")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=0)
+    ax.set_title("(b) Event-integrated WTP direct-MC budget", loc="left", fontweight="bold")
+    ax.set_ylim(*plot_ylim_from_values(me_values))
+    annotate_bar_values(ax, bars, me_values)
+
+    ax = axes[2]
+    diff_values = np.array([diff_event[key] for key, _ in PLOT_COMPONENTS], dtype=float)
+    diff_bars = ax.bar(x, diff_values, color=colors, alpha=0.88, width=0.72, edgecolor="none")
+    diff_bars[-1].set_hatch("//")
+    diff_bars[-1].set_edgecolor("firebrick")
+    diff_bars[-1].set_linewidth(1.3)
+    ax.axhline(0.0, color="0.4", linewidth=1.0, linestyle="--")
+    ax.set_ylabel("Imbalanced - balanced\n[mm]")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=0)
+    ax.set_title("(c) Event-integrated difference", loc="left", fontweight="bold")
+    ax.set_ylim(*plot_ylim_from_values(diff_values))
+    annotate_bar_values(ax, diff_bars, diff_values)
+
+    for ax in axes:
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.tick_params(axis="both", labelsize=10)
+
+    axes[0].xaxis.set_major_locator(mdates.HourLocator(interval=6))
+    axes[0].xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%HZ"))
+    axes[0].set_xlabel("Time around selected WTP spike")
+    axes[-1].set_xlabel("Integrated budget terms")
+
+    fig.tight_layout()
+    plt.savefig(STORY_FIGURE_PATH, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Story WTP direct-MC budget figure saved to {STORY_FIGURE_PATH}")
+
+
 def main():
     me_prog_patterns = monthly_patterns(mb.me_prog)
     me_surf_patterns = monthly_patterns(mb.me_surf)
@@ -508,6 +803,8 @@ def main():
     ]
     write_csv(SUMMARY_PATH, summary_rows, ["experiment", *me_summary.keys()])
     print(f"Summary saved to {SUMMARY_PATH}")
+    plot_mean_budget(me_rows, rp_rows)
+    plot_story_budget(me_detect, rp_detect, spike_idx, me_rows, rp_rows)
 
 
 if __name__ == "__main__":
