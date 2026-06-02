@@ -1,7 +1,7 @@
 """Western Tropical Pacific moisture-budget test with direct moisture convergence.
 
 This diagnostic is intentionally separate from spike_budget_stats.py. It loads a
-small halo around the WTP point, computes vertically integrated horizontal
+small point-centered stencil, computes vertically integrated horizontal
 moisture-flux convergence from q, u, and v, then samples the nearest WTP grid
 cell.
 """
@@ -26,9 +26,9 @@ SECONDS_PER_DAY = 86400.0
 EARTH_RADIUS_M = 6_371_000.0
 
 WTP_TARGET = {"key": "wtp", "title": "Western Tropical Pacific", "lon": (143.0, 143.0), "lat": (-1.0, -1.0)}
-HALO_DEG = 5.0
+POINT_STENCIL_COUNT = 3
 
-CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point")
+CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_lazy")
 EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_summary.csv")
 
@@ -82,40 +82,43 @@ def subset_existing(ds, keep_names, required, label):
     return ds[keep]
 
 
-def halo_region(region, halo_deg=HALO_DEG):
+def point_from_region(region):
     return (
-        (region["lat"][0] - halo_deg, region["lat"][1] + halo_deg),
-        (region["lon"][0] - halo_deg, region["lon"][1] + halo_deg),
+        0.5 * (region["lat"][0] + region["lat"][1]),
+        0.5 * (region["lon"][0] + region["lon"][1]),
     )
 
 
-def sel_region_with_fallback(ds, lat_rng, lon_rng):
-    subset = mb.sel_region(ds, lat_rng, lon_rng)
-    if subset.sizes.get("lat", 0) > 0 and subset.sizes.get("lon", 0) > 0:
-        return subset
+def select_nearest_stencil(ds, region, count=POINT_STENCIL_COUNT):
+    lat0, lon0 = point_from_region(region)
+    lat_vals = mb.nearest_coord_values(ds["lat"], lat0, count, is_lon=False)
+    lon_target = mb.canon_lon(lon0, ds["lon"])
+    lon_vals = mb.nearest_coord_values(ds["lon"], lon_target, count, is_lon=True)
+    return ds.sel(lat=lat_vals, lon=lon_vals)
 
-    lat_center = 0.5 * (lat_rng[0] + lat_rng[1])
-    lon_center = 0.5 * (lon_rng[0] + lon_rng[1])
-    lat_vals = mb.nearest_coord_values(ds["lat"], lat_center, 1, is_lon=False)
-    lon_target = mb.canon_lon(lon_center, ds["lon"])
+
+def select_nearest_point(ds, region):
+    lat0, lon0 = point_from_region(region)
+    lat_vals = mb.nearest_coord_values(ds["lat"], lat0, 1, is_lon=False)
+    lon_target = mb.canon_lon(lon0, ds["lon"])
     lon_vals = mb.nearest_coord_values(ds["lon"], lon_target, 1, is_lon=True)
     return ds.sel(lat=lat_vals, lon=lon_vals)
 
 
-def preprocess_prog(lat_rng, lon_rng):
+def preprocess_prog(region):
     def _preprocess(ds):
         ds = subset_existing(ds, PROG_KEEP, ("QV",), "prog")
         first_existing(ds, U_CANDIDATES, "zonal wind")
         first_existing(ds, V_CANDIDATES, "meridional wind")
-        return mb.sel_region(ds, lat_rng, lon_rng)
+        return select_nearest_stencil(ds, region)
 
     return _preprocess
 
 
-def preprocess_surf(lat_rng, lon_rng):
+def preprocess_surf(region):
     def _preprocess(ds):
         ds = subset_existing(ds, SURF_KEEP, ("PS", "LHFX"), "surf")
-        return mb.sel_region(ds, lat_rng, lon_rng)
+        return select_nearest_stencil(ds, region)
 
     return _preprocess
 
@@ -140,31 +143,32 @@ def describe_source_files(patterns, keep_names, label):
     return files
 
 
-def load_serial_subset_patterns(patterns, preprocess, label):
+def load_lazy_subset_patterns(patterns, preprocess, label):
     files = expand_files(patterns)
     if not files:
         raise ValueError(f"No files matched for {label}: {patterns}")
 
-    pieces = []
-    for path in mb.iter_files_with_progress(files, label):
-        with xr.open_dataset(path, engine="netcdf4", cache=False) as ds:
-            ds = preprocess(ds)
-            ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
-            if ds.sizes.get("time", 0) == 0:
-                continue
-            pieces.append(ds.load())
-
-    if not pieces:
-        raise ValueError(f"All {label} files were empty after subsetting {ANALYSIS_START} to {ANALYSIS_END}.")
-
-    return xr.concat(
-        pieces,
-        dim="time",
+    print(f"  -> Opening {len(files)} {label} files lazily with point stencil.")
+    ds = xr.open_mfdataset(
+        files,
+        engine="netcdf4",
+        preprocess=preprocess,
+        combine="nested",
+        concat_dim="time",
+        chunks={"time": 1},
         data_vars="minimal",
         coords="minimal",
         compat="override",
         combine_attrs="override",
-    ).sortby("time")
+        parallel=False,
+    )
+    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END)).sortby("time")
+    if ds.sizes.get("time", 0) == 0:
+        raise ValueError(f"All {label} files were empty after subsetting {ANALYSIS_START} to {ANALYSIS_END}.")
+    print(f"     lazy subset dims: {dict(ds.sizes)}")
+    print(f"     loaded stencil lat values: {ds['lat'].values}")
+    print(f"     loaded stencil lon values: {ds['lon'].values}")
+    return ds
 
 
 def pressure_values_pa(coord):
@@ -242,7 +246,7 @@ def derivative_radians(da, dim):
 
 def horizontal_divergence_sphere(flux_u, flux_v):
     if flux_u.sizes.get("lon", 0) < 3 or flux_u.sizes.get("lat", 0) < 3:
-        raise ValueError("Direct divergence needs at least 3 lat and 3 lon points in the loaded halo.")
+        raise ValueError("Direct divergence needs at least 3 lat and 3 lon points in the loaded stencil.")
 
     dfluxu_dlon = derivative_radians(flux_u, "lon")
     dfluxv_dlat = derivative_radians(flux_v, "lat")
@@ -261,13 +265,16 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
             print(f"    {var}: dims={ds[var].dims}, units={ds[var].attrs.get('units', 'unknown')}")
         return ds
 
-    lat_halo, lon_halo = halo_region(region)
     describe_source_files(prog_patterns, PROG_KEEP, f"{name} prog")
     describe_source_files(surf_patterns, SURF_KEEP, f"{name} surf")
 
-    print(f"\nLoading {name} data for {region['title']} with {HALO_DEG:g} deg halo...")
-    state3d = load_serial_subset_patterns(prog_patterns, preprocess_prog(lat_halo, lon_halo), f"{name} prog wtp_direct")
-    flux2d = load_serial_subset_patterns(surf_patterns, preprocess_surf(lat_halo, lon_halo), f"{name} surf wtp_direct")
+    lat0, lon0 = point_from_region(region)
+    print(
+        f"\nLoading {name} data for {region['title']} lazily around "
+        f"lat={lat0:g}, lon={lon0:g} with {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} stencil..."
+    )
+    state3d = load_lazy_subset_patterns(prog_patterns, preprocess_prog(region), f"{name} prog wtp_direct")
+    flux2d = load_lazy_subset_patterns(surf_patterns, preprocess_surf(region), f"{name} surf wtp_direct")
     state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
@@ -293,9 +300,7 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
     flux_v_grid = (q * v * dp / mb.g).sum(lev_dim, skipna=True)
     mc_direct_grid = -horizontal_divergence_sphere(flux_u_grid, flux_v_grid)
 
-    target_lat = region["lat"]
-    target_lon = region["lon"]
-    target_template = sel_region_with_fallback(col_W_grid, target_lat, target_lon)
+    target_template = select_nearest_point(col_W_grid, region)
     target_lats = target_template["lat"].values
     target_lons = target_template["lon"].values
 
@@ -332,7 +337,7 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
             "pressure_thickness_source": dp_source,
             "target_lat_values": ",".join(str(float(x)) for x in np.atleast_1d(target_lats)),
             "target_lon_values": ",".join(str(float(x)) for x in np.atleast_1d(target_lons)),
-            "halo_deg": HALO_DEG,
+            "point_stencil_count": POINT_STENCIL_COUNT,
         },
     )
     for var in ("Precip", "Evap", "StorageRelease", "MCDirect", "MCResidual", "ClosureResidual"):
