@@ -83,9 +83,9 @@ MEAN_FIGURE_PATH = Path(__file__).with_name("mse_budget2_multi_direct_mc_budget.
 STORY_FIGURE_TEMPLATE = "mse_budget2_{region_key}_direct_mc_story.png"
 
 PLOT_COMPONENTS = [
-    ("precip_mm", r"$\int P\,dt$"),
-    ("evap_mm", r"$\int E\,dt$"),
-    ("mc_direct_mm", r"$\int MC_{\mathrm{direct}}\,dt$"),
+    ("precip_mm", r"$\mathcal{A}_{24h}(P)$"),
+    ("evap_mm", r"$\mathcal{A}_{24h}(E)$"),
+    ("mc_direct_mm", r"$\mathcal{A}_{24h}(MC_{\mathrm{direct}})$"),
     ("storage_mm", r"$-\Delta W$"),
 ]
 
