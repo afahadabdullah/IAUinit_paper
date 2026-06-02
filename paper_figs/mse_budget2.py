@@ -85,7 +85,7 @@ STORY_FIGURE_TEMPLATE = "mse_budget2_{region_key}_direct_mc_story.png"
 PLOT_COMPONENTS = [
     ("precip_mm", r"$\sum_{24h} P\,\Delta t$"),
     ("evap_mm", r"$\sum_{24h} E\,\Delta t$"),
-    ("mc_direct_mm", r"$\sum_{24h} MC_{\mathrm{direct}}\,\Delta t$"),
+    ("mc_direct_mm", r"$\sum_{24h} MC\,\Delta t$"),
     ("storage_mm", r"$-\Delta W$"),
 ]
 
@@ -459,7 +459,7 @@ def write_direct_mc_cache(ds, name, region):
     tmp_cache_file.unlink(missing_ok=True)
     ds.to_netcdf(tmp_cache_file)
     tmp_cache_file.replace(cache_file)
-    print(f"  cached direct-MC series to {cache_file}")
+    print(f"  cached MC series to {cache_file}")
 
 
 def build_direct_mc_series_from_loaded(ds, name, region, align_freq):
@@ -534,7 +534,7 @@ def build_direct_mc_series_from_loaded(ds, name, region, align_freq):
     print(f"  target lat values: {target_lats}")
     print(f"  target lon values: {target_lons}")
     print(f"  column W range: {float(col_W.min()):.2f} to {float(col_W.max()):.2f} mm")
-    print(f"  direct MC range: {float(MCDirect.min() * SECONDS_PER_DAY):.2f} to {float(MCDirect.max() * SECONDS_PER_DAY):.2f} mm day-1")
+    print(f"  MC range: {float(MCDirect.min() * SECONDS_PER_DAY):.2f} to {float(MCDirect.max() * SECONDS_PER_DAY):.2f} mm day-1")
     print(f"  residual MC range: {float(MCResidual.min() * SECONDS_PER_DAY):.2f} to {float(MCResidual.max() * SECONDS_PER_DAY):.2f} mm day-1")
     return out
 
@@ -555,7 +555,7 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
     )
     state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog {region['key']}_direct")
     flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf {region['key']}_direct")
-    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
+    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} MC")
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
     out = build_direct_mc_series_from_loaded(ds, name, region, align_freq)
@@ -595,7 +595,7 @@ def compute_direct_mc_series_for_regions(prog_patterns, surf_patterns, name, reg
         preprocess_surf_regions(missing_regions),
         f"{name} surf multi_direct",
     )
-    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} multi-region direct MC")
+    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} multi-region MC")
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
     print(
@@ -666,7 +666,7 @@ def build_event_table(series, spike_indices, label, region, threshold, window_ho
 
 def summarize_rows(rows, label, scope_name=None):
     region_text = scope_name or (rows[0]["region_name"] if rows else "selected regions")
-    print(f"\n{label} {region_text} direct-MC event summary")
+    print(f"\n{label} {region_text} MC event summary")
     keys = ("precip_mm", "evap_mm", "mc_direct_mm", "storage_mm", "mc_residual_mm", "closure_residual_mm")
     summary = {}
     for key in keys:
@@ -675,7 +675,7 @@ def summarize_rows(rows, label, scope_name=None):
     print(
         "  mean [mm per 24-h window]: "
         f"P={summary['precip_mm']:.2f}, E={summary['evap_mm']:.2f}, "
-        f"MC_direct={summary['mc_direct_mm']:.2f}, -dW={summary['storage_mm']:.2f}, "
+        f"MC={summary['mc_direct_mm']:.2f}, -dW={summary['storage_mm']:.2f}, "
         f"MC_residual={summary['mc_residual_mm']:.2f}, "
         f"closure_residual={summary['closure_residual_mm']:.2f}"
     )
@@ -683,7 +683,7 @@ def summarize_rows(rows, label, scope_name=None):
         print(
             f"  {row['region_key']} {row['event_id']} {row['peak_time']}: "
             f"P={row['precip_mm']:.2f}, E={row['evap_mm']:.2f}, "
-            f"MC_direct={row['mc_direct_mm']:.2f}, -dW={row['storage_mm']:.2f}, "
+            f"MC={row['mc_direct_mm']:.2f}, -dW={row['storage_mm']:.2f}, "
             f"MC_residual={row['mc_residual_mm']:.2f}, "
             f"closure_residual={row['closure_residual_mm']:.2f}"
         )
@@ -840,7 +840,7 @@ def plot_mean_budget(me_rows, rp_rows, title_label="Selected basins", figure_pat
     fig.tight_layout()
     plt.savefig(figure_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Mean direct-MC budget figure saved to {figure_path}")
+    print(f"Mean MC budget figure saved to {figure_path}")
 
 
 def annotate_bar_values(ax, bars, values):
@@ -891,7 +891,7 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows, reg
     fig, axes = plt.subplots(3, 1, figsize=(11.5, 11.0), sharex=False)
     fig.subplots_adjust(hspace=0.30, top=0.93)
     fig.suptitle(
-        f"{region['title']} direct-MC moisture budget of the dominant precipitation spike",
+        f"{region['title']} MC moisture budget of the dominant precipitation spike",
         fontsize=15,
         y=0.985,
     )
@@ -948,7 +948,7 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows, reg
     ax.set_ylabel(f"mm per {EVENT_WINDOW_HOURS:g}-h spike window")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=0)
-    ax.set_title("(b) Event-integrated direct-MC budget", loc="left", fontweight="bold")
+    ax.set_title("(b) Event-integrated MC budget", loc="left", fontweight="bold")
     ax.set_ylim(*plot_ylim_from_values(me_values))
     annotate_bar_values(ax, bars, me_values)
 
@@ -979,7 +979,7 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows, reg
     story_path = Path(__file__).with_name(STORY_FIGURE_TEMPLATE.format(region_key=region["key"]))
     plt.savefig(story_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Story direct-MC budget figure saved to {story_path}")
+    print(f"Story MC budget figure saved to {story_path}")
 
 
 def main():
@@ -1047,7 +1047,7 @@ def main():
         print(
             "  "
             f"P={diff_summary['precip_mm']:.2f}, E={diff_summary['evap_mm']:.2f}, "
-            f"MC_direct={diff_summary['mc_direct_mm']:.2f}, -dW={diff_summary['storage_mm']:.2f}, "
+            f"MC={diff_summary['mc_direct_mm']:.2f}, -dW={diff_summary['storage_mm']:.2f}, "
             f"MC_residual={diff_summary['mc_residual_mm']:.2f}, "
             f"closure_residual={diff_summary['closure_residual_mm']:.2f}"
         )
@@ -1096,7 +1096,7 @@ def main():
     print(
         "  "
         f"P={diff_summary['precip_mm']:.2f}, E={diff_summary['evap_mm']:.2f}, "
-        f"MC_direct={diff_summary['mc_direct_mm']:.2f}, -dW={diff_summary['storage_mm']:.2f}, "
+        f"MC={diff_summary['mc_direct_mm']:.2f}, -dW={diff_summary['storage_mm']:.2f}, "
         f"MC_residual={diff_summary['mc_residual_mm']:.2f}, "
         f"closure_residual={diff_summary['closure_residual_mm']:.2f}"
     )
