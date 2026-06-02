@@ -28,7 +28,7 @@ ENSEMBLE_EQUIVALENT_FACTOR = 10
 ROBUST_TRIM_FRACTION = 0.20
 SECONDS_PER_DAY = 86400.0
 
-CACHE_DIR = Path(__file__).with_name("cache_latest")
+CACHE_DIR = Path(__file__).with_name("cache_latest_wfix")
 EVENT_TABLE_PATH = Path(__file__).with_name("multi_spike_moisture_budget_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_summary.csv")
 REGION_SUMMARY_PATH = Path(__file__).with_name("multi_spike_moisture_budget_region_summary.csv")
@@ -60,6 +60,71 @@ COMPONENTS = [
 # ==============================================================================
 # Helpers
 # ==============================================================================
+def pressure_values_pa(coord):
+    values = np.asarray(coord.values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size and np.nanmax(np.abs(finite)) < 2000.0:
+        values = values * 100.0
+    return values
+
+
+def pressure_dataarray_pa(da):
+    out = da
+    units = str(da.attrs.get("units", "")).lower()
+    finite_max = float(np.nanmax(np.abs(da.values))) if da.size else np.nan
+    if any(unit in units for unit in ("hpa", "millibar", "mbar")):
+        out = da * 100.0
+    elif np.isfinite(finite_max) and finite_max < 2000.0:
+        out = da * 100.0
+    return out
+
+
+def build_pressure_thickness_pa(ds3d, ps_2d):
+    """Return layer pressure thickness in Pa, using PS for the bottom edge."""
+    lev_dim = mb.get_lev_dim(ds3d)
+
+    for key in ("DELP", "delp", "Dp", "dP"):
+        if key in ds3d:
+            dp = pressure_dataarray_pa(ds3d[key])
+            if lev_dim not in dp.dims:
+                raise ValueError(f"{key} present but missing '{lev_dim}' dim.")
+            return dp.clip(min=0), key
+
+    for key in ("lev_bnds", "plev_bnds", "p_bnds", "pbnds"):
+        if key in ds3d:
+            pb = pressure_dataarray_pa(ds3d[key])
+            bdim = "bnds" if "bnds" in pb.dims else ("bound" if "bound" in pb.dims else "nbnds")
+            dp = abs(pb.isel({bdim: 1}) - pb.isel({bdim: 0}))
+            return dp, key
+
+    p_mid = pressure_values_pa(ds3d[lev_dim])
+    nlev = int(len(p_mid))
+    if nlev < 2:
+        raise ValueError("Need at least two pressure levels to infer layer thickness.")
+
+    order = np.argsort(p_mid)
+    p_sorted = p_mid[order]
+    edges = np.empty(nlev + 1, dtype=float)
+    edges[1:-1] = 0.5 * (p_sorted[:-1] + p_sorted[1:])
+    edges[0] = max(0.0, p_sorted[0] - 0.5 * (p_sorted[1] - p_sorted[0]))
+
+    pieces = [None] * nlev
+    for sorted_idx, orig_idx in enumerate(order):
+        upper = edges[sorted_idx]
+        if sorted_idx == nlev - 1:
+            lower = ps_2d
+        else:
+            lower = xr.where(ps_2d < edges[sorted_idx + 1], ps_2d, edges[sorted_idx + 1])
+        dp = (lower - upper).clip(min=0)
+        pieces[int(orig_idx)] = dp.expand_dims({lev_dim: [ds3d[lev_dim].values[int(orig_idx)]]})
+
+    return xr.concat(pieces, dim=lev_dim).assign_coords({lev_dim: ds3d[lev_dim]}), "pressure_levels"
+
+
+def pressure_midpoint_pa(ds, lev_dim):
+    return xr.DataArray(pressure_values_pa(ds[lev_dim]), dims=(lev_dim,)).broadcast_like(ds["QV"])
+
+
 def monthly_patterns(pattern, months=("200505", "200506")):
     return [pattern.replace("200505", month) for month in months]
 
@@ -170,18 +235,8 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
     )
 
     lev_dim = mb.get_lev_dim(ds)
-    has_delp = any(n in ds for n in ("DELP", "delp", "Dp", "dP"))
-    p_coord = ds[lev_dim]
-    lev_is_hpa = bool(p_coord.max() > 100 and p_coord.max() < 2000)
-
-    dp = mb.build_dp_positional(ds, ds["PS"]).clip(min=0)
-    if not has_delp and lev_is_hpa:
-        dp = dp * 100.0
-
-    p_mid_vals = ds[lev_dim].values
-    if lev_is_hpa:
-        p_mid_vals = p_mid_vals * 100.0
-    p_mid_4d = xr.DataArray(p_mid_vals, dims=(lev_dim,)).broadcast_like(ds["QV"])
+    dp, dp_source = build_pressure_thickness_pa(ds, ds["PS"])
+    p_mid_4d = pressure_midpoint_pa(ds, lev_dim)
     below_ground = p_mid_4d > ds["PS"]
 
     q = ds["QV"].where(~below_ground)
@@ -209,6 +264,13 @@ def compute_region_budget_series(prog_patterns, surf_patterns, name, region):
         "MoistureConvergence": MoistureConvergence,
         "StorageRelease": StorageRelease,
     }
+
+    w_min = float(col_W.min(skipna=True))
+    w_max = float(col_W.max(skipna=True))
+    print(
+        f"  -> Column W diagnostic for {name} {region['title']}: "
+        f"{w_min:.2f} to {w_max:.2f} mm using {dp_source} pressure thickness"
+    )
 
     series = mb.make_series_dataset(
         {name_: mb.box_mean(da) for name_, da in fields.items()},
