@@ -1,9 +1,9 @@
 """Western Tropical Pacific moisture-budget test with direct moisture convergence.
 
 This diagnostic is intentionally separate from spike_budget_stats.py. It loads a
-small point-centered stencil, computes vertically integrated horizontal
-moisture-flux convergence from q, u, and v, then samples the nearest WTP grid
-cell.
+small point-centered stencil synchronously, computes vertically integrated
+horizontal moisture-flux convergence from q, u, and v, then samples the nearest
+WTP grid cell.
 """
 
 import csv
@@ -28,7 +28,7 @@ EARTH_RADIUS_M = 6_371_000.0
 WTP_TARGET = {"key": "wtp", "title": "Western Tropical Pacific", "lon": (143.0, 143.0), "lat": (-1.0, -1.0)}
 POINT_STENCIL_COUNT = 3
 
-CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_lazy")
+CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
 EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_summary.csv")
 
@@ -143,29 +143,33 @@ def describe_source_files(patterns, keep_names, label):
     return files
 
 
-def load_lazy_subset_patterns(patterns, preprocess, label):
+def load_sync_stencil_patterns(patterns, preprocess, label):
     files = expand_files(patterns)
     if not files:
         raise ValueError(f"No files matched for {label}: {patterns}")
 
-    print(f"  -> Opening {len(files)} {label} files lazily with point stencil.")
-    ds = xr.open_mfdataset(
-        files,
-        engine="netcdf4",
-        preprocess=preprocess,
-        combine="nested",
-        concat_dim="time",
-        chunks={"time": 1},
+    print(f"  -> Opening {len(files)} {label} files synchronously with point stencil.")
+    pieces = []
+    for path in mb.iter_files_with_progress(files, label):
+        with xr.open_dataset(path, engine="netcdf4", cache=False) as ds:
+            ds = preprocess(ds)
+            ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
+            if ds.sizes.get("time", 0) == 0:
+                continue
+            pieces.append(ds.load())
+
+    if not pieces:
+        raise ValueError(f"All {label} files were empty after subsetting {ANALYSIS_START} to {ANALYSIS_END}.")
+
+    ds = xr.concat(
+        pieces,
+        dim="time",
         data_vars="minimal",
         coords="minimal",
         compat="override",
         combine_attrs="override",
-        parallel=False,
-    )
-    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END)).sortby("time")
-    if ds.sizes.get("time", 0) == 0:
-        raise ValueError(f"All {label} files were empty after subsetting {ANALYSIS_START} to {ANALYSIS_END}.")
-    print(f"     lazy subset dims: {dict(ds.sizes)}")
+    ).sortby("time")
+    print(f"     synchronous stencil dims: {dict(ds.sizes)}")
     print(f"     loaded stencil lat values: {ds['lat'].values}")
     print(f"     loaded stencil lon values: {ds['lon'].values}")
     return ds
@@ -270,11 +274,11 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
 
     lat0, lon0 = point_from_region(region)
     print(
-        f"\nLoading {name} data for {region['title']} lazily around "
+        f"\nLoading {name} data for {region['title']} synchronously around "
         f"lat={lat0:g}, lon={lon0:g} with {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} stencil..."
     )
-    state3d = load_lazy_subset_patterns(prog_patterns, preprocess_prog(region), f"{name} prog wtp_direct")
-    flux2d = load_lazy_subset_patterns(surf_patterns, preprocess_surf(region), f"{name} surf wtp_direct")
+    state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog wtp_direct")
+    flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf wtp_direct")
     state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
