@@ -1,9 +1,9 @@
-"""Western Tropical Pacific moisture-budget test with direct moisture convergence.
+"""Point moisture-budget test with direct moisture convergence.
 
 This diagnostic is intentionally separate from spike_budget_stats.py. It loads a
 small point-centered stencil synchronously, computes vertically integrated
 horizontal moisture-flux convergence from q, u, and v, then samples the nearest
-WTP grid cell.
+requested grid cell.
 """
 
 import csv
@@ -28,14 +28,59 @@ PRECIP_SMOOTH_HOURS = 6.0
 SECONDS_PER_DAY = 86400.0
 EARTH_RADIUS_M = 6_371_000.0
 
-WTP_TARGET = {"key": "wtp", "title": "Western Tropical Pacific", "lon": (143.0, 143.0), "lat": (-1.0, -1.0)}
+REGIONS = [
+    {
+        "key": "wtp",
+        "title": "Western Tropical Pacific",
+        "lon": (143.0, 143.0),
+        "lat": (-1.0, -1.0),
+        "source": "wk_analysis.py / wk_analysis_spike.py Region 1",
+    },
+    {
+        "key": "ctp",
+        "title": "Central Tropical Pacific",
+        "lon": (-145.0, -145.0),
+        "lat": (8.0, 8.0),
+        "source": "wk_analysis.py / wk_analysis_spike.py Region 2",
+    },
+    {
+        "key": "etp",
+        "title": "Eastern Tropical Pacific",
+        "lon": (-127.0, -127.0),
+        "lat": (7.0, 7.0),
+        "source": "wk_analysis.py / wk_analysis_spike.py Region 3",
+    },
+    {
+        "key": "itf",
+        "title": "Indonesian Throughflow",
+        "lon": (115.0, 115.0),
+        "lat": (6.0, 6.0),
+        "source": "center/nearest point from spike_budget_stats.py 114-115E, 5-6N box",
+    },
+    {
+        "key": "tio",
+        "title": "Tropical Indian Ocean",
+        "lon": (91.0, 91.0),
+        "lat": (8.0, 8.0),
+        "source": "center/nearest point from spike_budget_stats.py 89-92E, 7-8N box",
+    },
+    {
+        "key": "tao",
+        "title": "Tropical Atlantic Ocean",
+        "lon": (-38.0, -38.0),
+        "lat": (8.0, 8.0),
+        "source": "center/nearest point from spike_budget_stats.py 39-38W, 7-8N box",
+    },
+]
 POINT_STENCIL_COUNT = 3
 
-CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
-EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_events.csv")
-SUMMARY_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_summary.csv")
-MEAN_FIGURE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_budget.png")
-STORY_FIGURE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_story.png")
+CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_points_sync")
+LEGACY_WTP_CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
+EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_multi_direct_mc_events.csv")
+SUMMARY_PATH = Path(__file__).with_name("mse_budget2_multi_direct_mc_summary.csv")
+REGION_SUMMARY_PATH = Path(__file__).with_name("mse_budget2_multi_direct_mc_region_summary.csv")
+MEAN_FIGURE_PATH = Path(__file__).with_name("mse_budget2_multi_direct_mc_budget.png")
+STORY_FIGURE_TEMPLATE = "mse_budget2_{region_key}_direct_mc_story.png"
 
 PLOT_COMPONENTS = [
     ("precip_mm", r"$\int P\,dt$"),
@@ -99,6 +144,17 @@ def point_from_region(region):
         0.5 * (region["lat"][0] + region["lat"][1]),
         0.5 * (region["lon"][0] + region["lon"][1]),
     )
+
+
+def print_region_points(regions):
+    print("\nDirect-MC point targets")
+    for region in regions:
+        lat0, lon0 = point_from_region(region)
+        print(
+            f"  {region['key']}: {region['title']} requested lat={lat0:g}, lon={lon0:g} "
+            f"({region['source']})"
+        )
+    print(f"  Each target loads only a {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} lat/lon stencil.")
 
 
 def select_nearest_stencil(ds, region, count=POINT_STENCIL_COUNT):
@@ -270,16 +326,24 @@ def horizontal_divergence_sphere(flux_u, flux_v):
     return dfluxu_dlon / (EARTH_RADIUS_M * coslat) + dfluxv_dlat / EARTH_RADIUS_M
 
 
+def cache_candidates(cache_file, name, region):
+    candidates = [cache_file]
+    if region["key"] == "wtp":
+        candidates.append(LEGACY_WTP_CACHE_DIR / f"{name}_{region['key']}_direct_mc.nc")
+    return candidates
+
+
 def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
     CACHE_DIR.mkdir(exist_ok=True)
     cache_file = CACHE_DIR / f"{name}_{region['key']}_direct_mc.nc"
-    if cache_file.exists():
-        print(f"\nLoading {name} {region['title']} from cache: {cache_file}")
-        ds = xr.open_dataset(cache_file).load()
-        print(f"  cached variables: {list(ds.data_vars)}")
-        for var in ds.data_vars:
-            print(f"    {var}: dims={ds[var].dims}, units={ds[var].attrs.get('units', 'unknown')}")
-        return ds
+    for candidate in cache_candidates(cache_file, name, region):
+        if candidate.exists():
+            print(f"\nLoading {name} {region['title']} from cache: {candidate}")
+            ds = xr.open_dataset(candidate).load()
+            print(f"  cached variables: {list(ds.data_vars)}")
+            for var in ds.data_vars:
+                print(f"    {var}: dims={ds[var].dims}, units={ds[var].attrs.get('units', 'unknown')}")
+            return ds
 
     describe_source_files(prog_patterns, PROG_KEEP, f"{name} prog")
     describe_source_files(surf_patterns, SURF_KEEP, f"{name} surf")
@@ -289,8 +353,8 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
         f"\nLoading {name} data for {region['title']} synchronously around "
         f"lat={lat0:g}, lon={lon0:g} with {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} stencil..."
     )
-    state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog wtp_direct")
-    flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf wtp_direct")
+    state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog {region['key']}_direct")
+    flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf {region['key']}_direct")
     state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
     ds = xr.merge([state3d, flux2d], join="inner", compat="override")
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
@@ -389,8 +453,9 @@ def build_event_series(ds, smooth_hours=0.0):
     return out
 
 
-def build_event_table(series, spike_indices, label, window_hours=EVENT_WINDOW_HOURS):
+def build_event_table(series, spike_indices, label, region, threshold, window_hours=EVENT_WINDOW_HOURS):
     half_steps = mb.half_window_steps_from_hours(series, window_hours)
+    requested_lat, requested_lon = point_from_region(region)
     rows = []
     for spike_id, idx in enumerate(spike_indices, start=1):
         i0 = max(idx - half_steps, 0)
@@ -404,11 +469,18 @@ def build_event_table(series, spike_indices, label, window_hours=EVENT_WINDOW_HO
         closure_residual_int = precip_int - evap_int - mc_direct_int - storage_int
         rows.append(
             {
+                "region_key": region["key"],
+                "region_name": region["title"],
                 "experiment": label,
                 "event_id": f"S{spike_id}",
                 "peak_time": np.datetime_as_string(window.time.isel(time=idx - i0).values, unit="h"),
                 "event_start": np.datetime_as_string(window.time.isel(time=0).values, unit="h"),
                 "event_end": np.datetime_as_string(window.time.isel(time=-1).values, unit="h"),
+                "requested_lat": requested_lat,
+                "requested_lon": requested_lon,
+                "selected_lat_values": series.attrs.get("target_lat_values", ""),
+                "selected_lon_values": series.attrs.get("target_lon_values", ""),
+                "threshold_mm_day": float(threshold * SECONDS_PER_DAY),
                 "precip_mm": precip_int,
                 "evap_mm": evap_int,
                 "mc_direct_mm": mc_direct_int,
@@ -420,13 +492,14 @@ def build_event_table(series, spike_indices, label, window_hours=EVENT_WINDOW_HO
     return rows, half_steps
 
 
-def summarize_rows(rows, label):
-    print(f"\n{label} WTP direct-MC event summary")
+def summarize_rows(rows, label, scope_name=None):
+    region_text = scope_name or (rows[0]["region_name"] if rows else "selected regions")
+    print(f"\n{label} {region_text} direct-MC event summary")
     keys = ("precip_mm", "evap_mm", "mc_direct_mm", "storage_mm", "mc_residual_mm", "closure_residual_mm")
     summary = {}
     for key in keys:
         values = np.array([row[key] for row in rows], dtype=float)
-        summary[key] = float(np.nanmean(values))
+        summary[key] = float(np.nanmean(values)) if values.size else np.nan
     print(
         "  mean [mm per 24-h window]: "
         f"P={summary['precip_mm']:.2f}, E={summary['evap_mm']:.2f}, "
@@ -436,7 +509,7 @@ def summarize_rows(rows, label):
     )
     for row in rows:
         print(
-            f"  {row['event_id']} {row['peak_time']}: "
+            f"  {row['region_key']} {row['event_id']} {row['peak_time']}: "
             f"P={row['precip_mm']:.2f}, E={row['evap_mm']:.2f}, "
             f"MC_direct={row['mc_direct_mm']:.2f}, -dW={row['storage_mm']:.2f}, "
             f"MC_residual={row['mc_residual_mm']:.2f}, "
@@ -521,7 +594,7 @@ def summarize_plot_components(me_rows, rp_rows):
     return summary
 
 
-def plot_mean_budget(me_rows, rp_rows):
+def plot_mean_budget(me_rows, rp_rows, title_label="Selected basins", figure_path=MEAN_FIGURE_PATH):
     summary = summarize_plot_components(me_rows, rp_rows)
     labels = [row["component_label"] for row in summary]
     x = np.arange(len(labels))
@@ -561,7 +634,7 @@ def plot_mean_budget(me_rows, rp_rows):
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel(f"mm per {EVENT_WINDOW_HOURS:g}-h spike window")
-    ax.set_title("(a) WTP mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
+    ax.set_title(f"(a) {title_label} mean spike-window moisture budget", loc="left", fontweight="bold", fontsize=12)
     ax.legend(loc="upper left", frameon=False)
     ax.set_ylim(*plot_ylim_from_values(np.r_[rean_mean, iau_mean], np.r_[rean_sem, iau_sem]))
 
@@ -593,9 +666,9 @@ def plot_mean_budget(me_rows, rp_rows):
         ax.tick_params(axis="both", labelsize=10)
 
     fig.tight_layout()
-    plt.savefig(MEAN_FIGURE_PATH, dpi=300, bbox_inches="tight")
+    plt.savefig(figure_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Mean WTP direct-MC budget figure saved to {MEAN_FIGURE_PATH}")
+    print(f"Mean direct-MC budget figure saved to {figure_path}")
 
 
 def annotate_bar_values(ax, bars, values):
@@ -619,9 +692,9 @@ def annotate_bar_values(ax, bars, values):
         )
 
 
-def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows):
+def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows, region):
     if len(spike_indices) == 0:
-        print("Skipping story figure because no WTP spikes were detected.")
+        print(f"Skipping story figure because no {region['title']} spikes were detected.")
         return
 
     spike_values = np.asarray(me_detect["Precip"].isel(time=spike_indices).values, dtype=float)
@@ -646,7 +719,7 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows):
     fig, axes = plt.subplots(3, 1, figsize=(11.5, 11.0), sharex=False)
     fig.subplots_adjust(hspace=0.30, top=0.93)
     fig.suptitle(
-        "WTP direct-MC moisture budget of the dominant precipitation spike",
+        f"{region['title']} direct-MC moisture budget of the dominant precipitation spike",
         fontsize=15,
         y=0.985,
     )
@@ -703,7 +776,7 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows):
     ax.set_ylabel(f"mm per {EVENT_WINDOW_HOURS:g}-h spike window")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=0)
-    ax.set_title("(b) Event-integrated WTP direct-MC budget", loc="left", fontweight="bold")
+    ax.set_title("(b) Event-integrated direct-MC budget", loc="left", fontweight="bold")
     ax.set_ylim(*plot_ylim_from_values(me_values))
     annotate_bar_values(ax, bars, me_values)
 
@@ -727,13 +800,14 @@ def plot_story_budget(me_detect, rp_detect, spike_indices, me_rows, rp_rows):
 
     axes[0].xaxis.set_major_locator(mdates.HourLocator(interval=6))
     axes[0].xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%HZ"))
-    axes[0].set_xlabel("Time around selected WTP spike")
+    axes[0].set_xlabel(f"Time around selected {region['key'].upper()} spike")
     axes[-1].set_xlabel("Integrated budget terms")
 
     fig.tight_layout()
-    plt.savefig(STORY_FIGURE_PATH, dpi=300, bbox_inches="tight")
+    story_path = Path(__file__).with_name(STORY_FIGURE_TEMPLATE.format(region_key=region["key"]))
+    plt.savefig(story_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Story WTP direct-MC budget figure saved to {STORY_FIGURE_PATH}")
+    print(f"Story direct-MC budget figure saved to {story_path}")
 
 
 def main():
@@ -742,38 +816,85 @@ def main():
     rp_prog_patterns = monthly_patterns(mb.rp_prog)
     rp_surf_patterns = monthly_patterns(mb.rp_surf)
 
-    me_series = compute_direct_mc_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", WTP_TARGET)
-    rp_series = compute_direct_mc_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", WTP_TARGET)
-    me_series, rp_series = xr.align(me_series, rp_series, join="inner")
+    print_region_points(REGIONS)
 
-    me_detect = build_event_series(me_series, smooth_hours=PRECIP_SMOOTH_HOURS)
-    rp_detect = build_event_series(rp_series, smooth_hours=PRECIP_SMOOTH_HOURS)
-    reference_precip = xr.where(me_detect["Precip"] >= rp_detect["Precip"], me_detect["Precip"], rp_detect["Precip"])
-    dt_hours = mb.infer_time_step_hours(me_detect)
-    min_sep_steps = max(1, int(round(MIN_PEAK_SEPARATION_HOURS / max(dt_hours, 1.0e-6))))
-    spike_idx, threshold = mb.detect_precip_spikes(
-        reference_precip,
-        quantile=SPIKE_QUANTILE,
-        min_separation=min_sep_steps,
-        max_spikes=999,
-    )
-    print(
-        f"\nDetected {len(spike_idx)} WTP spikes above {SPIKE_QUANTILE:.2f} quantile "
-        f"(threshold {threshold * SECONDS_PER_DAY:.2f} mm day-1)."
-    )
+    all_me_rows = []
+    all_rp_rows = []
+    all_rows = []
+    region_summary_rows = []
+    summary_keys = ("precip_mm", "evap_mm", "mc_direct_mm", "storage_mm", "mc_residual_mm", "closure_residual_mm")
 
-    me_budget = build_event_series(me_series, smooth_hours=0.0)
-    rp_budget = build_event_series(rp_series, smooth_hours=0.0)
-    me_rows, _ = build_event_table(me_budget, spike_idx, "Reanalysis-IC")
-    rp_rows, _ = build_event_table(rp_budget, spike_idx, "IAU-IC")
-    rows = me_rows + rp_rows
+    for region in REGIONS:
+        lat0, lon0 = point_from_region(region)
+        print(f"\n=== {region['title']} ({region['key']}) requested lat={lat0:g}, lon={lon0:g} ===")
+
+        me_series = compute_direct_mc_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
+        rp_series = compute_direct_mc_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
+        me_series, rp_series = xr.align(me_series, rp_series, join="inner")
+
+        me_detect = build_event_series(me_series, smooth_hours=PRECIP_SMOOTH_HOURS)
+        rp_detect = build_event_series(rp_series, smooth_hours=PRECIP_SMOOTH_HOURS)
+        reference_precip = xr.where(me_detect["Precip"] >= rp_detect["Precip"], me_detect["Precip"], rp_detect["Precip"])
+        dt_hours = mb.infer_time_step_hours(me_detect)
+        min_sep_steps = max(1, int(round(MIN_PEAK_SEPARATION_HOURS / max(dt_hours, 1.0e-6))))
+        spike_idx, threshold = mb.detect_precip_spikes(
+            reference_precip,
+            quantile=SPIKE_QUANTILE,
+            min_separation=min_sep_steps,
+            max_spikes=999,
+        )
+        print(
+            f"\nDetected {len(spike_idx)} {region['key'].upper()} spikes above {SPIKE_QUANTILE:.2f} quantile "
+            f"(threshold {threshold * SECONDS_PER_DAY:.2f} mm day-1)."
+        )
+
+        me_budget = build_event_series(me_series, smooth_hours=0.0)
+        rp_budget = build_event_series(rp_series, smooth_hours=0.0)
+        me_rows, _ = build_event_table(me_budget, spike_idx, "Reanalysis-IC", region, threshold)
+        rp_rows, _ = build_event_table(rp_budget, spike_idx, "IAU-IC", region, threshold)
+        all_me_rows.extend(me_rows)
+        all_rp_rows.extend(rp_rows)
+        all_rows.extend(me_rows + rp_rows)
+
+        me_summary = summarize_rows(me_rows, "Reanalysis-IC")
+        rp_summary = summarize_rows(rp_rows, "IAU-IC")
+        diff_summary = {key: me_summary[key] - rp_summary[key] for key in summary_keys}
+        print(f"\n{region['title']} Reanalysis-IC minus IAU-IC mean difference")
+        print(
+            "  "
+            f"P={diff_summary['precip_mm']:.2f}, E={diff_summary['evap_mm']:.2f}, "
+            f"MC_direct={diff_summary['mc_direct_mm']:.2f}, -dW={diff_summary['storage_mm']:.2f}, "
+            f"MC_residual={diff_summary['mc_residual_mm']:.2f}, "
+            f"closure_residual={diff_summary['closure_residual_mm']:.2f}"
+        )
+
+        region_summary_rows.extend(
+            [
+                {"region_key": region["key"], "region_name": region["title"], "experiment": "Reanalysis-IC", **me_summary},
+                {"region_key": region["key"], "region_name": region["title"], "experiment": "IAU-IC", **rp_summary},
+                {
+                    "region_key": region["key"],
+                    "region_name": region["title"],
+                    "experiment": "Reanalysis-IC minus IAU-IC",
+                    **diff_summary,
+                },
+            ]
+        )
+        plot_story_budget(me_detect, rp_detect, spike_idx, me_rows, rp_rows, region)
 
     fieldnames = [
+        "region_key",
+        "region_name",
         "experiment",
         "event_id",
         "peak_time",
         "event_start",
         "event_end",
+        "requested_lat",
+        "requested_lon",
+        "selected_lat_values",
+        "selected_lon_values",
+        "threshold_mm_day",
         "precip_mm",
         "evap_mm",
         "mc_direct_mm",
@@ -781,13 +902,13 @@ def main():
         "mc_residual_mm",
         "closure_residual_mm",
     ]
-    write_csv(EVENT_TABLE_PATH, rows, fieldnames)
+    write_csv(EVENT_TABLE_PATH, all_rows, fieldnames)
     print(f"\nEvent table saved to {EVENT_TABLE_PATH}")
 
-    me_summary = summarize_rows(me_rows, "Reanalysis-IC")
-    rp_summary = summarize_rows(rp_rows, "IAU-IC")
-    diff_summary = {key: me_summary[key] - rp_summary[key] for key in me_summary}
-    print("\nReanalysis-IC minus IAU-IC mean difference")
+    me_summary = summarize_rows(all_me_rows, "Reanalysis-IC", scope_name="all selected basins")
+    rp_summary = summarize_rows(all_rp_rows, "IAU-IC", scope_name="all selected basins")
+    diff_summary = {key: me_summary[key] - rp_summary[key] for key in summary_keys}
+    print("\nAll selected basins Reanalysis-IC minus IAU-IC mean difference")
     print(
         "  "
         f"P={diff_summary['precip_mm']:.2f}, E={diff_summary['evap_mm']:.2f}, "
@@ -803,8 +924,9 @@ def main():
     ]
     write_csv(SUMMARY_PATH, summary_rows, ["experiment", *me_summary.keys()])
     print(f"Summary saved to {SUMMARY_PATH}")
-    plot_mean_budget(me_rows, rp_rows)
-    plot_story_budget(me_detect, rp_detect, spike_idx, me_rows, rp_rows)
+    write_csv(REGION_SUMMARY_PATH, region_summary_rows, ["region_key", "region_name", "experiment", *summary_keys])
+    print(f"Region summary saved to {REGION_SUMMARY_PATH}")
+    plot_mean_budget(all_me_rows, all_rp_rows, title_label="Selected basins")
 
 
 if __name__ == "__main__":
