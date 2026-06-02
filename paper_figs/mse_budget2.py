@@ -1,8 +1,9 @@
 """Western Tropical Pacific moisture-budget test with direct moisture convergence.
 
 This diagnostic is intentionally separate from spike_budget_stats.py. It loads a
-small halo around the WTP box, computes vertically integrated horizontal
-moisture-flux convergence from q, u, and v, then averages over the WTP box.
+small halo around the WTP point, computes vertically integrated horizontal
+moisture-flux convergence from q, u, and v, then samples the nearest WTP grid
+cell.
 """
 
 import csv
@@ -24,10 +25,10 @@ PRECIP_SMOOTH_HOURS = 6.0
 SECONDS_PER_DAY = 86400.0
 EARTH_RADIUS_M = 6_371_000.0
 
-WTP_TARGET = {"key": "wtp", "title": "Western Tropical Pacific", "lon": (140.0, 149.0), "lat": (-5.0, 5.0)}
+WTP_TARGET = {"key": "wtp", "title": "Western Tropical Pacific", "lon": (143.0, 143.0), "lat": (-1.0, -1.0)}
 HALO_DEG = 5.0
 
-CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp")
+CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point")
 EVENT_TABLE_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_events.csv")
 SUMMARY_PATH = Path(__file__).with_name("mse_budget2_wtp_direct_mc_summary.csv")
 
