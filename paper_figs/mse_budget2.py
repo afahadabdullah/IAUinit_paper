@@ -1,9 +1,9 @@
 """Point moisture-budget test with direct moisture convergence.
 
 This diagnostic is intentionally separate from spike_budget_stats.py. It loads a
-small point-centered stencil synchronously, computes vertically integrated
-horizontal moisture-flux convergence from q, u, and v, then samples the nearest
-requested grid cell.
+small union of point-centered stencils synchronously, computes vertically
+integrated horizontal moisture-flux convergence from q, u, and v, then samples
+the nearest requested grid cell for each region.
 """
 
 import csv
@@ -154,14 +154,22 @@ def print_region_points(regions):
             f"  {region['key']}: {region['title']} requested lat={lat0:g}, lon={lon0:g} "
             f"({region['source']})"
         )
-    print(f"  Each target loads only a {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} lat/lon stencil.")
+    print(
+        f"  Each target needs a {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} lat/lon stencil; "
+        "the loader reads the union of those stencils, not the full grid."
+    )
 
 
-def select_nearest_stencil(ds, region, count=POINT_STENCIL_COUNT):
+def stencil_coord_values(ds, region, count=POINT_STENCIL_COUNT):
     lat0, lon0 = point_from_region(region)
     lat_vals = mb.nearest_coord_values(ds["lat"], lat0, count, is_lon=False)
     lon_target = mb.canon_lon(lon0, ds["lon"])
     lon_vals = mb.nearest_coord_values(ds["lon"], lon_target, count, is_lon=True)
+    return lat_vals, lon_vals
+
+
+def select_nearest_stencil(ds, region, count=POINT_STENCIL_COUNT):
+    lat_vals, lon_vals = stencil_coord_values(ds, region, count=count)
     return ds.sel(lat=lat_vals, lon=lon_vals)
 
 
@@ -170,6 +178,42 @@ def select_nearest_point(ds, region):
     lat_vals = mb.nearest_coord_values(ds["lat"], lat0, 1, is_lon=False)
     lon_target = mb.canon_lon(lon0, ds["lon"])
     lon_vals = mb.nearest_coord_values(ds["lon"], lon_target, 1, is_lon=True)
+    return ds.sel(lat=lat_vals, lon=lon_vals)
+
+
+def unique_values_in_coord_order(coord, values):
+    coord_values = np.asarray(coord.values, dtype=float)
+    indices = []
+    for value in values:
+        match = np.flatnonzero(np.isclose(coord_values, float(value), rtol=0.0, atol=1.0e-8))
+        if match.size == 0:
+            raise ValueError(f"Could not find selected coordinate value {value} in {coord.name}.")
+        indices.append(int(match[0]))
+    return coord_values[np.sort(np.unique(indices))]
+
+
+def union_stencil_values(ds, regions, verbose=False):
+    lat_values = []
+    lon_values = []
+    if verbose:
+        print("  requested basin stencils in this load:")
+    for region in regions:
+        lat_vals, lon_vals = stencil_coord_values(ds, region)
+        lat_values.extend(lat_vals)
+        lon_values.extend(lon_vals)
+        if verbose:
+            print(f"    {region['key']}: lat {lat_vals}, lon {lon_vals}")
+    return (
+        unique_values_in_coord_order(ds["lat"], lat_values),
+        unique_values_in_coord_order(ds["lon"], lon_values),
+    )
+
+
+def select_union_stencil(ds, regions, verbose=False):
+    lat_vals, lon_vals = union_stencil_values(ds, regions, verbose=verbose)
+    if verbose:
+        print(f"  union lat values: {lat_vals}")
+        print(f"  union lon values: {lon_vals}")
     return ds.sel(lat=lat_vals, lon=lon_vals)
 
 
@@ -191,6 +235,24 @@ def preprocess_surf(region):
     return _preprocess
 
 
+def preprocess_prog_regions(regions):
+    def _preprocess(ds):
+        ds = subset_existing(ds, PROG_KEEP, ("QV",), "prog")
+        first_existing(ds, U_CANDIDATES, "zonal wind")
+        first_existing(ds, V_CANDIDATES, "meridional wind")
+        return select_union_stencil(ds, regions)
+
+    return _preprocess
+
+
+def preprocess_surf_regions(regions):
+    def _preprocess(ds):
+        ds = subset_existing(ds, SURF_KEEP, ("PS", "LHFX"), "surf")
+        return select_union_stencil(ds, regions)
+
+    return _preprocess
+
+
 def describe_source_files(patterns, keep_names, label):
     files = expand_files(patterns)
     print(f"\n{label} source diagnostics")
@@ -208,6 +270,14 @@ def describe_source_files(patterns, keep_names, label):
             long_name = da.attrs.get("long_name", da.attrs.get("standard_name", ""))
             print(f"    {name}: dims={da.dims}, shape={da.shape}, units={units}, {long_name}")
         print(f"  coordinates: {[name for name in ('time', 'lev', 'plev', 'level', 'lat', 'lon') if name in ds]}")
+    return files
+
+
+def describe_union_selection(patterns, keep_names, label, regions):
+    files = describe_source_files(patterns, keep_names, label)
+    with xr.open_dataset(files[0], engine="netcdf4", cache=False) as ds:
+        ds = subset_existing(ds, keep_names, (), label)
+        select_union_stencil(ds, regions, verbose=True)
     return files
 
 
@@ -240,6 +310,38 @@ def load_sync_stencil_patterns(patterns, preprocess, label):
     print(f"     synchronous stencil dims: {dict(ds.sizes)}")
     print(f"     loaded stencil lat values: {ds['lat'].values}")
     print(f"     loaded stencil lon values: {ds['lon'].values}")
+    return ds
+
+
+def load_sync_union_stencil_patterns(patterns, preprocess, label):
+    files = expand_files(patterns)
+    if not files:
+        raise ValueError(f"No files matched for {label}: {patterns}")
+
+    print(f"  -> Opening {len(files)} {label} files synchronously with union point stencils.")
+    pieces = []
+    for path in mb.iter_files_with_progress(files, label):
+        with xr.open_dataset(path, engine="netcdf4", cache=False) as ds:
+            ds = preprocess(ds)
+            ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
+            if ds.sizes.get("time", 0) == 0:
+                continue
+            pieces.append(ds.load())
+
+    if not pieces:
+        raise ValueError(f"All {label} files were empty after subsetting {ANALYSIS_START} to {ANALYSIS_END}.")
+
+    ds = xr.concat(
+        pieces,
+        dim="time",
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+        combine_attrs="override",
+    ).sortby("time")
+    print(f"     union stencil dims: {dict(ds.sizes)}")
+    print(f"     loaded union lat values: {ds['lat'].values}")
+    print(f"     loaded union lon values: {ds['lon'].values}")
     return ds
 
 
@@ -333,9 +435,12 @@ def cache_candidates(cache_file, name, region):
     return candidates
 
 
-def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
-    CACHE_DIR.mkdir(exist_ok=True)
-    cache_file = CACHE_DIR / f"{name}_{region['key']}_direct_mc.nc"
+def cache_file_for(name, region):
+    return CACHE_DIR / f"{name}_{region['key']}_direct_mc.nc"
+
+
+def load_cached_direct_mc_series(name, region):
+    cache_file = cache_file_for(name, region)
     for candidate in cache_candidates(cache_file, name, region):
         if candidate.exists():
             print(f"\nLoading {name} {region['title']} from cache: {candidate}")
@@ -344,25 +449,26 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
             for var in ds.data_vars:
                 print(f"    {var}: dims={ds[var].dims}, units={ds[var].attrs.get('units', 'unknown')}")
             return ds
+    return None
 
-    describe_source_files(prog_patterns, PROG_KEEP, f"{name} prog")
-    describe_source_files(surf_patterns, SURF_KEEP, f"{name} surf")
 
-    lat0, lon0 = point_from_region(region)
-    print(
-        f"\nLoading {name} data for {region['title']} synchronously around "
-        f"lat={lat0:g}, lon={lon0:g} with {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} stencil..."
-    )
-    state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog {region['key']}_direct")
-    flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf {region['key']}_direct")
-    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
-    ds = xr.merge([state3d, flux2d], join="inner", compat="override")
-    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
+def write_direct_mc_cache(ds, name, region):
+    CACHE_DIR.mkdir(exist_ok=True)
+    cache_file = cache_file_for(name, region)
+    tmp_cache_file = cache_file.with_suffix(cache_file.suffix + ".tmp")
+    tmp_cache_file.unlink(missing_ok=True)
+    ds.to_netcdf(tmp_cache_file)
+    tmp_cache_file.replace(cache_file)
+    print(f"  cached direct-MC series to {cache_file}")
+
+
+def build_direct_mc_series_from_loaded(ds, name, region, align_freq):
+    ds = select_nearest_stencil(ds, region)
 
     u_name = first_existing(ds, U_CANDIDATES, "zonal wind")
     v_name = first_existing(ds, V_CANDIDATES, "meridional wind")
     precip_name = next((n for n in ("PRECTOT", "TPREC", "precip") if n in ds), None)
-    print(f"\n{name} loaded diagnostic variables")
+    print(f"\n{name} loaded diagnostic variables for {region['title']}")
     print(f"  alignment: {align_freq}, time steps: {ds.sizes.get('time', 0)}")
     print(f"  q: QV, u: {u_name}, v: {v_name}, ps: PS, evap flux: LHFX, precip: {precip_name or 'missing'}")
     print(f"  dimensions: {dict(ds.sizes)}")
@@ -430,13 +536,79 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
     print(f"  column W range: {float(col_W.min()):.2f} to {float(col_W.max()):.2f} mm")
     print(f"  direct MC range: {float(MCDirect.min() * SECONDS_PER_DAY):.2f} to {float(MCDirect.max() * SECONDS_PER_DAY):.2f} mm day-1")
     print(f"  residual MC range: {float(MCResidual.min() * SECONDS_PER_DAY):.2f} to {float(MCResidual.max() * SECONDS_PER_DAY):.2f} mm day-1")
-
-    tmp_cache_file = cache_file.with_suffix(cache_file.suffix + ".tmp")
-    tmp_cache_file.unlink(missing_ok=True)
-    out.to_netcdf(tmp_cache_file)
-    tmp_cache_file.replace(cache_file)
-    print(f"  cached direct-MC series to {cache_file}")
     return out
+
+
+def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
+    CACHE_DIR.mkdir(exist_ok=True)
+    cached = load_cached_direct_mc_series(name, region)
+    if cached is not None:
+        return cached
+
+    describe_source_files(prog_patterns, PROG_KEEP, f"{name} prog")
+    describe_source_files(surf_patterns, SURF_KEEP, f"{name} surf")
+
+    lat0, lon0 = point_from_region(region)
+    print(
+        f"\nLoading {name} data for {region['title']} synchronously around "
+        f"lat={lat0:g}, lon={lon0:g} with {POINT_STENCIL_COUNT}x{POINT_STENCIL_COUNT} stencil..."
+    )
+    state3d = load_sync_stencil_patterns(prog_patterns, preprocess_prog(region), f"{name} prog {region['key']}_direct")
+    flux2d = load_sync_stencil_patterns(surf_patterns, preprocess_surf(region), f"{name} surf {region['key']}_direct")
+    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} {region['title']} direct MC")
+    ds = xr.merge([state3d, flux2d], join="inner", compat="override")
+    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
+    out = build_direct_mc_series_from_loaded(ds, name, region, align_freq)
+    write_direct_mc_cache(out, name, region)
+    return out
+
+
+def compute_direct_mc_series_for_regions(prog_patterns, surf_patterns, name, regions):
+    CACHE_DIR.mkdir(exist_ok=True)
+    series_by_key = {}
+    missing_regions = []
+    for region in regions:
+        cached = load_cached_direct_mc_series(name, region)
+        if cached is None:
+            missing_regions.append(region)
+        else:
+            series_by_key[region["key"]] = cached
+
+    if not missing_regions:
+        print(f"\nAll {name} basin point series loaded from cache.")
+        return series_by_key
+
+    print(
+        f"\nLoading {name} data once for {len(missing_regions)} missing basin point(s): "
+        + ", ".join(region["key"] for region in missing_regions)
+    )
+    describe_union_selection(prog_patterns, PROG_KEEP, f"{name} prog", missing_regions)
+    describe_union_selection(surf_patterns, SURF_KEEP, f"{name} surf", missing_regions)
+
+    state3d = load_sync_union_stencil_patterns(
+        prog_patterns,
+        preprocess_prog_regions(missing_regions),
+        f"{name} prog multi_direct",
+    )
+    flux2d = load_sync_union_stencil_patterns(
+        surf_patterns,
+        preprocess_surf_regions(missing_regions),
+        f"{name} surf multi_direct",
+    )
+    state3d, flux2d, align_freq = mb.align_time_axes(state3d, flux2d, f"{name} multi-region direct MC")
+    ds = xr.merge([state3d, flux2d], join="inner", compat="override")
+    ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
+    print(
+        f"  -> Synchronized {ds.sizes.get('time', 0)} steps for {name} "
+        f"using {align_freq} alignment"
+    )
+
+    for region in missing_regions:
+        out = build_direct_mc_series_from_loaded(ds, name, region, align_freq)
+        write_direct_mc_cache(out, name, region)
+        series_by_key[region["key"]] = out
+
+    return series_by_key
 
 
 def integrate_flux_window(da):
@@ -817,6 +989,18 @@ def main():
     rp_surf_patterns = monthly_patterns(mb.rp_surf)
 
     print_region_points(REGIONS)
+    me_series_by_key = compute_direct_mc_series_for_regions(
+        me_prog_patterns,
+        me_surf_patterns,
+        "Reanalysis-IC",
+        REGIONS,
+    )
+    rp_series_by_key = compute_direct_mc_series_for_regions(
+        rp_prog_patterns,
+        rp_surf_patterns,
+        "IAU-IC",
+        REGIONS,
+    )
 
     all_me_rows = []
     all_rp_rows = []
@@ -828,8 +1012,8 @@ def main():
         lat0, lon0 = point_from_region(region)
         print(f"\n=== {region['title']} ({region['key']}) requested lat={lat0:g}, lon={lon0:g} ===")
 
-        me_series = compute_direct_mc_series(me_prog_patterns, me_surf_patterns, "Reanalysis-IC", region)
-        rp_series = compute_direct_mc_series(rp_prog_patterns, rp_surf_patterns, "IAU-IC", region)
+        me_series = me_series_by_key[region["key"]]
+        rp_series = rp_series_by_key[region["key"]]
         me_series, rp_series = xr.align(me_series, rp_series, join="inner")
 
         me_detect = build_event_series(me_series, smooth_hours=PRECIP_SMOOTH_HOURS)
