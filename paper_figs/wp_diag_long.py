@@ -4,6 +4,9 @@
 This script is a standalone version of cape_omg_WP.ipynb. It plots the
 dynamically imbalanced and dynamically balanced diagnostics used for
 WP_diag_long.png.
+
+Optionally loads direct moisture-convergence cache files produced by
+mse_budget_wp_2wk.py and adds MC + Precip panels as a 4th column.
 """
 
 from __future__ import annotations
@@ -84,6 +87,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=16,
         help="Time chunk size used while lazily reading source NetCDF files.",
+    )
+    parser.add_argument(
+        "--mc-cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing direct-MC cache files from mse_budget_wp_2wk.py. "
+            "Defaults to cache_mse_budget_wp_2wk/ next to this script."
+        ),
     )
     return parser.parse_args()
 
@@ -348,6 +360,47 @@ def load_or_compute_cases(args: argparse.Namespace) -> dict[str, dict[str, xr.Da
     return cases
 
 
+# ==============================================================================
+# Direct MC cache loading
+# ==============================================================================
+SECONDS_PER_DAY = 86400.0
+
+
+def default_mc_cache_dir() -> Path:
+    return Path(__file__).with_name("cache_mse_budget_wp_2wk")
+
+
+def load_mc_cache(
+    mc_cache_dir: Path | None,
+    start: str,
+    end: str,
+) -> dict[str, xr.Dataset] | None:
+    """Try to load direct-MC cache files for both experiments.
+
+    Returns a dict {"imbalanced": ds, "balanced": ds} or None if not available.
+    """
+    cache_dir = mc_cache_dir or default_mc_cache_dir()
+    imbalanced_file = cache_dir / "Reanalysis-IC_wtp_direct_mc.nc"
+    balanced_file = cache_dir / "IAU-IC_wtp_direct_mc.nc"
+
+    if not imbalanced_file.exists() or not balanced_file.exists():
+        progress(
+            f"MC cache not found in {cache_dir} "
+            f"(need Reanalysis-IC_wtp_direct_mc.nc and IAU-IC_wtp_direct_mc.nc). "
+            "Skipping MC panels. Run mse_budget_wp_2wk.py first."
+        )
+        return None
+
+    progress(f"Loading direct-MC cache from {cache_dir}")
+    mc = {}
+    for key, path in [("imbalanced", imbalanced_file), ("balanced", balanced_file)]:
+        ds = xr.open_dataset(path).load()
+        ds = ds.sel(time=slice(start, end))
+        mc[key] = ds
+        progress(f"  {key}: {ds.sizes.get('time', 0)} time steps, vars={list(ds.data_vars)}")
+    return mc
+
+
 def style_time_axis(ax: plt.Axes) -> None:
     ax.set_xlabel("Date (month-day)")
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=2))
@@ -449,13 +502,41 @@ def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: s
     ax.legend(lines, [line.get_label() for line in lines], loc="upper right")
 
 
+def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
+    """Plot directly computed moisture convergence with precipitation overlay."""
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    color_mc = "green"
+    color_pr = "darkblue"
+
+    mc_mm_day = mc_ds["MCDirect"] * SECONDS_PER_DAY
+    precip_mm_day = mc_ds["Precip"] * SECONDS_PER_DAY
+
+    line1 = line(ax, mc_mm_day, color=color_mc, label="MC (direct)")
+    ax.set_ylabel("MC (mm day⁻¹)", color=color_mc)
+    ax.tick_params(axis="y", labelcolor=color_mc)
+    style_time_axis(ax)
+
+    ax2 = ax.twinx()
+    line2 = line(ax2, precip_mm_day, color=color_pr, label="Precip", alpha=0.55, linewidth=1.6)
+    ax2.set_ylabel("Precip (mm day⁻¹)", color=color_pr)
+    ax2.tick_params(axis="y", labelcolor=color_pr)
+
+    lines = line1 + line2
+    ax.legend(lines, [ln.get_label() for ln in lines], loc="upper right")
+
+
 def plot_figure(
     imbalanced: dict[str, xr.DataArray],
     balanced: dict[str, xr.DataArray],
     output: Path,
+    mc_data: dict[str, xr.Dataset] | None = None,
 ) -> None:
-    progress(f"Plotting figure to {output}")
-    fig = plt.figure(figsize=(12, 6))
+    has_mc = mc_data is not None
+    ncols = 4 if has_mc else 3
+    figw = 16 if has_mc else 12
+
+    progress(f"Plotting figure to {output} ({'with' if has_mc else 'without'} MC panels, {ncols} columns)")
+    fig = plt.figure(figsize=(figw, 6))
     fig.text(
         0.025,
         0.75,
@@ -479,13 +560,20 @@ def plot_figure(
         color="orange",
     )
 
-    plot_sst_air(plt.subplot(2, 3, 1), imbalanced, "(a) SST tendencies and Air Temp")
-    plot_heat_fluxes(plt.subplot(2, 3, 2), imbalanced, "(b) Heat Fluxes")
-    plot_omega_cape_precip(plt.subplot(2, 3, 3), imbalanced, "(c) Omega500, CAPE, and Precip")
+    # Row 1: imbalanced
+    plot_sst_air(plt.subplot(2, ncols, 1), imbalanced, "(a) SST tendencies and Air Temp")
+    plot_heat_fluxes(plt.subplot(2, ncols, 2), imbalanced, "(b) Heat Fluxes")
+    plot_omega_cape_precip(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500, CAPE, and Precip")
+    if has_mc:
+        plot_mc_precip(plt.subplot(2, ncols, 4), mc_data["imbalanced"], "(d) MC and Precip")
 
-    plot_sst_air(plt.subplot(2, 3, 4), balanced, "(d) SST tendencies and Air Temp")
-    plot_heat_fluxes(plt.subplot(2, 3, 5), balanced, "(e) Heat Fluxes")
-    plot_omega_cape_precip(plt.subplot(2, 3, 6), balanced, "(f) Omega500, CAPE, and Precip")
+    # Row 2: balanced
+    bal_labels = ["(d)", "(e)", "(f)"] if not has_mc else ["(e)", "(f)", "(g)"]
+    plot_sst_air(plt.subplot(2, ncols, ncols + 1), balanced, f"{bal_labels[0]} SST tendencies and Air Temp")
+    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, f"{bal_labels[1]} Heat Fluxes")
+    plot_omega_cape_precip(plt.subplot(2, ncols, ncols + 3), balanced, f"{bal_labels[2]} Omega500, CAPE, and Precip")
+    if has_mc:
+        plot_mc_precip(plt.subplot(2, ncols, ncols + 4), mc_data["balanced"], "(h) MC and Precip")
 
     plt.tight_layout(rect=[0.075, 0.02, 0.98, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -503,7 +591,8 @@ def main() -> None:
     )
 
     cases = load_or_compute_cases(args)
-    plot_figure(cases["imbalanced"], cases["balanced"], args.output)
+    mc_data = load_mc_cache(args.mc_cache_dir, args.start, args.end)
+    plot_figure(cases["imbalanced"], cases["balanced"], args.output, mc_data=mc_data)
     progress(f"Saved {args.output}")
 
 
