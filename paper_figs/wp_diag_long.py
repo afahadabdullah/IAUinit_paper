@@ -513,12 +513,14 @@ def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
 
     line1 = line(ax, mc_mm_day, color=color_mc, label="MC (direct)")
     ax.set_ylabel("MC (mm day⁻¹)", color=color_mc)
+    ax.set_ylim(0, 100)
     ax.tick_params(axis="y", labelcolor=color_mc)
     style_time_axis(ax)
 
     ax2 = ax.twinx()
     line2 = line(ax2, precip_mm_day, color=color_pr, label="Precip", alpha=0.55, linewidth=1.6)
     ax2.set_ylabel("Precip (mm day⁻¹)", color=color_pr)
+    ax2.set_ylim(0, 100)
     ax2.tick_params(axis="y", labelcolor=color_pr)
 
     lines = line1 + line2
