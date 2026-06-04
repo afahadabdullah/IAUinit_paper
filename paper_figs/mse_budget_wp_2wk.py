@@ -371,10 +371,16 @@ def compute_experiment(prog_pattern, surf_pattern, name):
     cache_file = CACHE_DIR / f"{name}_wtp_direct_mc.nc"
 
     if cache_file.exists():
-        print(f"\nLoading {name} WTP from cache: {cache_file}")
         ds = xr.open_dataset(cache_file).load()
-        print(f"  cached variables: {list(ds.data_vars)}")
-        return ds
+        cached_start = ds.attrs.get("analysis_start")
+        cached_end = ds.attrs.get("analysis_end")
+        if cached_start == ANALYSIS_START and cached_end == ANALYSIS_END:
+            print(f"\nLoading {name} WTP from cache: {cache_file}")
+            print(f"  cached variables: {list(ds.data_vars)}")
+            return ds
+        else:
+            print(f"\nCache dates ({cached_start} to {cached_end}) differ from requested ({ANALYSIS_START} to {ANALYSIS_END}). Recomputing...")
+            ds.close()
 
     prog_patterns = monthly_patterns(prog_pattern)
     surf_patterns = monthly_patterns(surf_pattern)
