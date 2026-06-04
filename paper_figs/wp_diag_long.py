@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--month", default="200505", help="YYYYMM holding subdirectory.")
     parser.add_argument("--start", default="2005-05-06", help="Start date.")
-    parser.add_argument("--end", default="2005-05-20", help="End date.")
+    parser.add_argument("--end", default="2005-05-28", help="End date.")
     parser.add_argument("--lon", type=float, default=143.0, help="Longitude for the diagnostic point.")
     parser.add_argument("--lat", type=float, default=-1.0, help="Latitude for the diagnostic point.")
     parser.add_argument(
@@ -513,14 +513,14 @@ def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
 
     line1 = line(ax, mc_mm_day, color=color_mc, label="MC (direct)")
     ax.set_ylabel("MC (mm day⁻¹)", color=color_mc)
-    ax.set_ylim(0, 100)
+    ax.set_ylim(-10, 120)
     ax.tick_params(axis="y", labelcolor=color_mc)
     style_time_axis(ax)
 
     ax2 = ax.twinx()
     line2 = line(ax2, precip_mm_day, color=color_pr, label="Precip", alpha=0.55, linewidth=1.6)
     ax2.set_ylabel("Precip (mm day⁻¹)", color=color_pr)
-    ax2.set_ylim(0, 100)
+    ax2.set_ylim(-10, 120)
     ax2.tick_params(axis="y", labelcolor=color_pr)
 
     lines = line1 + line2

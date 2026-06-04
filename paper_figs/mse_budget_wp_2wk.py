@@ -23,7 +23,7 @@ import mse_budget as mb
 # Configuration — copied from mse_budget2.py, narrowed to WTP + 2 weeks
 # ==============================================================================
 ANALYSIS_START = "2005-05-06"
-ANALYSIS_END = "2005-05-20"
+ANALYSIS_END = "2005-05-28"
 SECONDS_PER_DAY = 86400.0
 EARTH_RADIUS_M = 6_371_000.0
 POINT_STENCIL_COUNT = 3
