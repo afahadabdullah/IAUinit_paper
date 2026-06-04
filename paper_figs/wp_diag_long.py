@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
         help="Experiment initialized from the dynamically balanced state.",
     )
     parser.add_argument("--month", default="200505", help="YYYYMM holding subdirectory.")
-    parser.add_argument("--start", default="2005-05-05", help="Start date.")
-    parser.add_argument("--end", default="2005-05-14", help="End date.")
+    parser.add_argument("--start", default="2005-05-06", help="Start date.")
+    parser.add_argument("--end", default="2005-05-20", help="End date.")
     parser.add_argument("--lon", type=float, default=143.0, help="Longitude for the diagnostic point.")
     parser.add_argument("--lat", type=float, default=-1.0, help="Latitude for the diagnostic point.")
     parser.add_argument(
