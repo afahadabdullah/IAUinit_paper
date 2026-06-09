@@ -25,6 +25,7 @@ SPIKE_QUANTILE = 0.95
 MIN_PEAK_SEPARATION_HOURS = 24.0
 EVENT_WINDOW_HOURS = 24.0
 PRECIP_SMOOTH_HOURS = 6.0
+MC_TIME_MEAN_HOURS = 3.0
 SECONDS_PER_DAY = 86400.0
 EARTH_RADIUS_M = 6_371_000.0
 
@@ -439,6 +440,79 @@ def cache_file_for(name, region):
     return CACHE_DIR / f"{name}_{region['key']}_direct_mc.nc"
 
 
+def centered_time_mean_from_instantaneous(da, window_hours):
+    if window_hours <= 0.0 or da.sizes.get("time", 0) <= 1:
+        return da.copy()
+
+    times = da.time.values.astype("datetime64[s]").astype(np.float64)
+    values = np.asarray(da.values, dtype=float)
+    finite = np.isfinite(times) & np.isfinite(values)
+    if finite.sum() <= 1:
+        return da.copy()
+
+    source_times = times[finite]
+    source_values = values[finite]
+    order = np.argsort(source_times)
+    source_times = source_times[order]
+    source_values = source_values[order]
+
+    half_window_seconds = 0.5 * window_hours * 3600.0
+    averaged = np.full(values.shape, np.nan, dtype=float)
+    for idx, time_value in enumerate(times):
+        if not np.isfinite(time_value):
+            continue
+        start = max(time_value - half_window_seconds, source_times[0])
+        end = min(time_value + half_window_seconds, source_times[-1])
+        if end <= start:
+            averaged[idx] = np.interp(time_value, source_times, source_values)
+            continue
+
+        inner = source_times[(source_times > start) & (source_times < end)]
+        eval_times = np.unique(np.concatenate(([start], inner, [end])))
+        eval_values = np.interp(eval_times, source_times, source_values)
+        averaged[idx] = float(np.trapz(eval_values, eval_times) / (end - start))
+
+    out = xr.DataArray(averaged, dims=da.dims, coords=da.coords, attrs=dict(da.attrs), name=da.name)
+    out.attrs["time_mean_hours"] = float(window_hours)
+    out.attrs["time_mean_method"] = "centered box mean from cached instantaneous MC using linear interpolation"
+    return out
+
+
+def apply_mc_time_mean(ds, window_hours=MC_TIME_MEAN_HOURS):
+    if window_hours <= 0.0 or "MCDirect" not in ds:
+        return ds
+    applied = float(ds.attrs.get("mc_time_mean_applied_hours", 0.0) or 0.0)
+    if np.isclose(applied, window_hours):
+        return ds
+
+    out = ds.copy()
+    source = out["MCDirectInstantaneous"] if "MCDirectInstantaneous" in out else out["MCDirect"]
+    if "MCDirectInstantaneous" not in out:
+        out["MCDirectInstantaneous"] = source.copy()
+        out["MCDirectInstantaneous"].attrs.update(source.attrs)
+        out["MCDirectInstantaneous"].attrs["description"] = "instantaneous MC from cached direct convergence calculation"
+
+    out["MCDirect"] = centered_time_mean_from_instantaneous(source, window_hours)
+    out["MCDirect"].attrs.update(source.attrs)
+    out["MCDirect"].attrs["description"] = f"{window_hours:g}-h centered mean approximation of MC"
+    out["MCDirect"].attrs["source_variable"] = "MCDirectInstantaneous"
+    if all(name in out for name in ("Precip", "Evap", "StorageRelease")):
+        out["ClosureResidual"] = out["Precip"] - out["Evap"] - out["MCDirect"] - out["StorageRelease"]
+        out["ClosureResidual"].attrs["units"] = out["MCDirect"].attrs.get("units", "kg m-2 s-1 (equivalent mm s-1)")
+    out.attrs["mc_time_mean_applied_hours"] = float(window_hours)
+    out.attrs["mc_time_mean_method"] = "centered box mean from cached instantaneous MC using linear interpolation"
+
+    dt_hours = mb.infer_time_step_hours(out)
+    if dt_hours > window_hours:
+        print(
+            f"  -> Using {window_hours:g}-h mean approximation for MC from cached instantaneous series "
+            f"(cached cadence ~{dt_hours:g}h, so this cannot recover sub-cadence variability)."
+        )
+    else:
+        print(f"  -> Using {window_hours:g}-h centered mean MC from cached instantaneous series.")
+    return out
+
+
 def load_cached_direct_mc_series(name, region):
     cache_file = cache_file_for(name, region)
     for candidate in cache_candidates(cache_file, name, region):
@@ -448,7 +522,7 @@ def load_cached_direct_mc_series(name, region):
             print(f"  cached variables: {list(ds.data_vars)}")
             for var in ds.data_vars:
                 print(f"    {var}: dims={ds[var].dims}, units={ds[var].attrs.get('units', 'unknown')}")
-            return ds
+            return apply_mc_time_mean(ds)
     return None
 
 
@@ -560,7 +634,7 @@ def compute_direct_mc_series(prog_patterns, surf_patterns, name, region):
     ds = ds.sel(time=slice(ANALYSIS_START, ANALYSIS_END))
     out = build_direct_mc_series_from_loaded(ds, name, region, align_freq)
     write_direct_mc_cache(out, name, region)
-    return out
+    return apply_mc_time_mean(out)
 
 
 def compute_direct_mc_series_for_regions(prog_patterns, surf_patterns, name, regions):
@@ -606,7 +680,7 @@ def compute_direct_mc_series_for_regions(prog_patterns, surf_patterns, name, reg
     for region in missing_regions:
         out = build_direct_mc_series_from_loaded(ds, name, region, align_freq)
         write_direct_mc_cache(out, name, region)
-        series_by_key[region["key"]] = out
+        series_by_key[region["key"]] = apply_mc_time_mean(out)
 
     return series_by_key
 
@@ -653,6 +727,7 @@ def build_event_table(series, spike_indices, label, region, threshold, window_ho
                 "selected_lat_values": series.attrs.get("target_lat_values", ""),
                 "selected_lon_values": series.attrs.get("target_lon_values", ""),
                 "threshold_mm_day": float(threshold * SECONDS_PER_DAY),
+                "mc_time_mean_hours": series.attrs.get("mc_time_mean_applied_hours", ""),
                 "precip_mm": precip_int,
                 "evap_mm": evap_int,
                 "mc_direct_mm": mc_direct_int,
@@ -1079,6 +1154,7 @@ def main():
         "selected_lat_values",
         "selected_lon_values",
         "threshold_mm_day",
+        "mc_time_mean_hours",
         "precip_mm",
         "evap_mm",
         "mc_direct_mm",
