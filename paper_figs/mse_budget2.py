@@ -147,7 +147,7 @@ def point_from_region(region):
 
 
 def print_region_points(regions):
-    print("\nDirect-MC point targets")
+    print("\nMC point targets")
     for region in regions:
         lat0, lon0 = point_from_region(region)
         print(
