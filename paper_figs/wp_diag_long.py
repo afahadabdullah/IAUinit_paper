@@ -5,7 +5,7 @@ This script is a standalone version of cape_omg_WP.ipynb. It plots the
 dynamically imbalanced and dynamically balanced diagnostics used for
 WP_diag_long.png.
 
-Optionally loads direct moisture-convergence cache files produced by
+Optionally loads moisture-convergence cache files produced by
 mse_budget_wp_2wk.py and adds MC + Precip panels as a 4th column.
 """
 
@@ -23,12 +23,14 @@ matplotlib.use("Agg")
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import xarray as xr
 
 
 PRECIP_CANDIDATES = ("PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
 CAPE_VARS = ("CAPE", "T", "OMEGA")
 SURF_VARS = ("SHFX", "TA", "TS_FOUND", "PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
+MC_TIME_MEAN_HOURS = 3.0
 
 
 def progress(message: str) -> None:
@@ -361,7 +363,7 @@ def load_or_compute_cases(args: argparse.Namespace) -> dict[str, dict[str, xr.Da
 
 
 # ==============================================================================
-# Direct MC cache loading
+# MC cache loading
 # ==============================================================================
 SECONDS_PER_DAY = 86400.0
 
@@ -370,12 +372,94 @@ def default_mc_cache_dir() -> Path:
     return Path(__file__).with_name("cache_mse_budget_wp_2wk")
 
 
+def infer_time_step_hours(ds: xr.Dataset | xr.DataArray) -> float:
+    if "time" not in ds.coords or ds.sizes.get("time", 0) <= 1:
+        return np.nan
+
+    times = ds["time"].values.astype("datetime64[s]").astype(np.float64)
+    diffs = np.diff(times)
+    diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+    if diffs.size == 0:
+        return np.nan
+    return float(np.nanmedian(diffs) / 3600.0)
+
+
+def centered_time_mean_from_instantaneous(da: xr.DataArray, window_hours: float) -> xr.DataArray:
+    if window_hours <= 0.0 or da.sizes.get("time", 0) <= 1:
+        return da.copy()
+
+    times = da.time.values.astype("datetime64[s]").astype(np.float64)
+    values = np.asarray(da.values, dtype=float)
+    finite = np.isfinite(times) & np.isfinite(values)
+    if finite.sum() <= 1:
+        return da.copy()
+
+    source_times = times[finite]
+    source_values = values[finite]
+    order = np.argsort(source_times)
+    source_times = source_times[order]
+    source_values = source_values[order]
+
+    half_window_seconds = 0.5 * window_hours * 3600.0
+    averaged = np.full(values.shape, np.nan, dtype=float)
+    for idx, time_value in enumerate(times):
+        if not np.isfinite(time_value):
+            continue
+        start = max(time_value - half_window_seconds, source_times[0])
+        end = min(time_value + half_window_seconds, source_times[-1])
+        if end <= start:
+            averaged[idx] = np.interp(time_value, source_times, source_values)
+            continue
+
+        inner = source_times[(source_times > start) & (source_times < end)]
+        eval_times = np.unique(np.concatenate(([start], inner, [end])))
+        eval_values = np.interp(eval_times, source_times, source_values)
+        averaged[idx] = float(np.trapz(eval_values, eval_times) / (end - start))
+
+    out = xr.DataArray(averaged, dims=da.dims, coords=da.coords, attrs=dict(da.attrs), name=da.name)
+    out.attrs["time_mean_hours"] = float(window_hours)
+    out.attrs["time_mean_method"] = "centered box mean from cached instantaneous MC using linear interpolation"
+    return out
+
+
+def apply_mc_time_mean(ds: xr.Dataset, window_hours: float = MC_TIME_MEAN_HOURS) -> xr.Dataset:
+    if window_hours <= 0.0 or "MCDirect" not in ds:
+        return ds
+    applied = float(ds.attrs.get("mc_time_mean_applied_hours", 0.0) or 0.0)
+    if np.isclose(applied, window_hours):
+        return ds
+
+    out = ds.copy()
+    source = out["MCDirectInstantaneous"] if "MCDirectInstantaneous" in out else out["MCDirect"]
+    if "MCDirectInstantaneous" not in out:
+        out["MCDirectInstantaneous"] = source.copy()
+        out["MCDirectInstantaneous"].attrs.update(source.attrs)
+        out["MCDirectInstantaneous"].attrs["description"] = "instantaneous MC from cached convergence calculation"
+
+    out["MCDirect"] = centered_time_mean_from_instantaneous(source, window_hours)
+    out["MCDirect"].attrs.update(source.attrs)
+    out["MCDirect"].attrs["description"] = f"{window_hours:g}-h centered mean approximation of MC"
+    out["MCDirect"].attrs["source_variable"] = "MCDirectInstantaneous"
+    out.attrs["mc_time_mean_applied_hours"] = float(window_hours)
+    out.attrs["mc_time_mean_method"] = "centered box mean from cached instantaneous MC using linear interpolation"
+
+    dt_hours = infer_time_step_hours(out)
+    if np.isfinite(dt_hours) and dt_hours > window_hours:
+        progress(
+            f"  Using {window_hours:g}-h mean approximation for MC from cached instantaneous series "
+            f"(cached cadence ~{dt_hours:g}h, so this cannot recover sub-cadence variability)."
+        )
+    else:
+        progress(f"  Using {window_hours:g}-h centered mean MC from cached instantaneous series.")
+    return out
+
+
 def load_mc_cache(
     mc_cache_dir: Path | None,
     start: str,
     end: str,
 ) -> dict[str, xr.Dataset] | None:
-    """Try to load direct-MC cache files for both experiments.
+    """Try to load MC cache files for both experiments.
 
     Returns a dict {"imbalanced": ds, "balanced": ds} or None if not available.
     """
@@ -391,11 +475,12 @@ def load_mc_cache(
         )
         return None
 
-    progress(f"Loading direct-MC cache from {cache_dir}")
+    progress(f"Loading MC cache from {cache_dir}")
     mc = {}
     for key, path in [("imbalanced", imbalanced_file), ("balanced", balanced_file)]:
         ds = xr.open_dataset(path).load()
         ds = ds.sel(time=slice(start, end))
+        ds = apply_mc_time_mean(ds)
         mc[key] = ds
         progress(f"  {key}: {ds.sizes.get('time', 0)} time steps, vars={list(ds.data_vars)}")
     return mc
@@ -503,7 +588,7 @@ def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: s
 
 
 def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
-    """Plot directly computed moisture convergence with precipitation overlay."""
+    """Plot moisture convergence with precipitation overlay."""
     ax.set_title(title, fontsize=12, fontweight="bold")
     color_mc = "green"
     color_pr = "darkblue"
@@ -511,7 +596,7 @@ def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
     mc_mm_day = mc_ds["MCDirect"] * SECONDS_PER_DAY
     precip_mm_day = mc_ds["Precip"] * SECONDS_PER_DAY
 
-    line1 = line(ax, mc_mm_day, color=color_mc, label="MC (direct)")
+    line1 = line(ax, mc_mm_day, color=color_mc, label="MC")
     ax.set_ylabel("MC (mm day⁻¹)", color=color_mc)
     ax.set_ylim(-10, 120)
     ax.tick_params(axis="y", labelcolor=color_mc)
