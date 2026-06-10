@@ -419,12 +419,20 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
             zorder=4,
         )
 
-    ax.set_title("(C) P(t) vs MC (t + lag/lead) correlation", fontsize=16, fontweight="bold")
-    ax.set_xlabel("Lag hours")
-    ax.set_ylabel("Pearson r")
+    ax.set_title("(C) P(t) vs MC (t + lag/lead) correlation", fontsize=18, fontweight="bold")
+    ax.set_xlabel("Lag hours", fontsize=17)
+    ax.set_ylabel("Pearson r", fontsize=17)
+    ax.tick_params(axis="both", labelsize=15)
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_ylim(0.0, 1.0)
-    ax.legend(loc="lower center", frameon=True, framealpha=0.9, facecolor="white", edgecolor="0.8")
+    ax.legend(
+        loc="lower center",
+        frameon=True,
+        framealpha=0.9,
+        facecolor="white",
+        edgecolor="0.8",
+        fontsize=15,
+    )
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
