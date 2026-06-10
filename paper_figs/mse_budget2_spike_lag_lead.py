@@ -366,6 +366,16 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     print(f"\nWrote {path}")
 
 
+def format_pvalue(value: float) -> str:
+    if not np.isfinite(value):
+        return "p=nan"
+    if value < 0.001:
+        return "p<0.001"
+    if value < 0.1:
+        return f"p={value:.3f}"
+    return f"p={value:.2f}"
+
+
 def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str, str]]) -> None:
     experiment = EXPERIMENTS[0]
     selected_by_group = {}
@@ -386,15 +396,15 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
+    label_offsets = {"all": 9, "initial": -15, "later": 20}
+    label_va = {"all": "bottom", "initial": "top", "later": "bottom"}
     for group_key, group_label, color, marker, linestyle in EVENT_GROUPS:
         selected = selected_by_group.get(group_key)
         if not selected:
             continue
         lags = [float(row["lag_hours"]) for row in selected]
         values = [float(row["pearson_r"]) for row in selected]
-        n_spikes = max(int(row["n_spikes"]) for row in selected)
-        lag0 = next((row for row in selected if np.isclose(float(row["lag_hours"]), 0.0)), selected[0])
-        n_pairs = int(lag0["n_pairs"])
+        pvalues = [float(row["pvalue"]) for row in selected]
         ax.plot(
             lags,
             values,
@@ -403,17 +413,30 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
             linestyle=linestyle,
             linewidth=2.5,
             markersize=6,
-            label=f"{group_label} (events={n_spikes}, lag0 samples={n_pairs})",
+            label=group_label,
         )
+        for lag, value, pvalue in zip(lags, values, pvalues):
+            if not np.isfinite(value):
+                continue
+            ax.annotate(
+                format_pvalue(pvalue),
+                xy=(lag, value),
+                xytext=(0, label_offsets[group_key]),
+                textcoords="offset points",
+                ha="center",
+                va=label_va[group_key],
+                fontsize=7,
+                color=color,
+            )
 
     ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation", fontsize=12)
     ax.set_xlabel("Lag hours")
     ax.set_ylabel("Pearson r")
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_ylim(-1.0, 1.0)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), frameon=False, ncol=1)
+    ax.legend(loc="lower center", frameon=True, framealpha=0.9, facecolor="white", edgecolor="0.8")
     fig.suptitle("P(t) vs MC(t + lag)", fontsize=14)
-    fig.tight_layout(rect=[0, 0.06, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
