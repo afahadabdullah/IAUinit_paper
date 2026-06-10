@@ -79,8 +79,8 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help="Comma-separated region keys to analyze, or 'all'.",
     )
-    parser.add_argument("--lag-min-hours", type=float, default=-12.0)
-    parser.add_argument("--lag-max-hours", type=float, default=12.0)
+    parser.add_argument("--lag-min-hours", type=float, default=-6.0)
+    parser.add_argument("--lag-max-hours", type=float, default=6.0)
     parser.add_argument("--lag-step-hours", type=float, default=6.0)
     parser.add_argument(
         "--lag-hours",
@@ -373,7 +373,7 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
     if not selected_by_group:
         raise ValueError("No pooled all-event rows available to plot.")
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
     for group_key, group_label, color, marker, linestyle in EVENT_GROUPS:
