@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lag-min-hours", type=float, default=-6.0)
     parser.add_argument("--lag-max-hours", type=float, default=6.0)
-    parser.add_argument("--lag-step-hours", type=float, default=6.0)
+    parser.add_argument("--lag-step-hours", type=float, default=3.0)
     parser.add_argument(
         "--lag-hours",
         default=None,
@@ -268,15 +268,23 @@ def collect_lag_pairs(
     correlation_smooth_hours: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     ds = smoothed_pair_dataset(series, correlation_smooth_hours)
-    dt_hours = mb.infer_time_step_hours(ds)
-    lag_steps_float = lag_hours / max(dt_hours, 1.0e-6)
-    lag_steps = int(round(lag_steps_float))
-    if not np.isclose(lag_steps_float, lag_steps, atol=0.01):
+    times = ds.time.values.astype("datetime64[s]").astype(np.float64)
+    if times.size <= 1:
         return np.asarray([], dtype=float), np.asarray([], dtype=float)
 
     half_steps = mb.half_window_steps_from_hours(ds, event_window_hours)
     precip = np.asarray(ds["Precip"].values, dtype=float) * SECONDS_PER_DAY
     mc = np.asarray(ds["MCDirect"].values, dtype=float) * SECONDS_PER_DAY
+    finite_mc = np.isfinite(times) & np.isfinite(mc)
+    if finite_mc.sum() <= 1:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+
+    source_times = times[finite_mc]
+    source_mc = mc[finite_mc]
+    order = np.argsort(source_times)
+    source_times = source_times[order]
+    source_mc = source_mc[order]
+    lag_seconds = lag_hours * 3600.0
 
     p_samples = []
     mc_samples = []
@@ -285,11 +293,12 @@ def collect_lag_pairs(
         i0 = max(int(peak_idx) - half_steps, 0)
         i1 = min(int(peak_idx) + half_steps, n_time - 1)
         for p_idx in range(i0, i1 + 1):
-            mc_idx = p_idx + lag_steps
-            if mc_idx < 0 or mc_idx >= n_time:
+            p_time = times[p_idx]
+            mc_time = p_time + lag_seconds
+            if not np.isfinite(p_time) or mc_time < source_times[0] or mc_time > source_times[-1]:
                 continue
             p_value = precip[p_idx]
-            mc_value = mc[mc_idx]
+            mc_value = np.interp(mc_time, source_times, source_mc)
             if np.isfinite(p_value) and np.isfinite(mc_value):
                 p_samples.append(float(p_value))
                 mc_samples.append(float(mc_value))
@@ -341,6 +350,7 @@ def correlation_row(
         "precip_smooth_hours_for_detection": float(args.precip_smooth_hours),
         "correlation_smooth_hours": float(args.correlation_smooth_hours),
         "mc_time_mean_hours": float(args.mc_time_mean_hours),
+        "mc_lag_sampling": "linear interpolation of cached MC to t + lag",
         "cache_file": str(cache_file),
     }
 
@@ -423,6 +433,7 @@ def main() -> None:
     print(f"  Event window    : +/-{0.5 * args.event_window_hours:g} h around each spike")
     print(f"  Initial split   : peak time <= simulation start + {args.initial_event_hours:g} h")
     print(f"  MC time mean    : {args.mc_time_mean_hours:g} h (0 means cached MCDirect unchanged)")
+    print("  MC lag sampling : linear interpolation of cached MC to t + lag")
 
     rows = []
     pooled_samples: dict[tuple[str, str, float], tuple[list[float], list[float], int]] = {}
