@@ -30,6 +30,7 @@ SPIKE_QUANTILE = 0.95
 MIN_PEAK_SEPARATION_HOURS = 24.0
 EVENT_WINDOW_HOURS = 24.0
 PRECIP_SMOOTH_HOURS = 6.0
+INITIAL_EVENT_HOURS = 72.0
 SECONDS_PER_DAY = 86400.0
 
 REGIONS = [
@@ -42,6 +43,11 @@ REGIONS = [
 ]
 
 EXPERIMENTS = ("Reanalysis-IC",)
+EVENT_GROUPS = (
+    ("all", "All spike events", "solid"),
+    ("initial", "Initial events <= 3 days", "dashed"),
+    ("later", "Events > 3 days", "dotted"),
+)
 CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_points_sync")
 LEGACY_WTP_CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
 CSV_PATH = Path(__file__).with_name("mse_budget2_spike_lag_lead_correlation.csv")
@@ -83,6 +89,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--spike-quantile", type=float, default=SPIKE_QUANTILE)
     parser.add_argument("--event-window-hours", type=float, default=EVENT_WINDOW_HOURS)
+    parser.add_argument(
+        "--initial-event-hours",
+        type=float,
+        default=INITIAL_EVENT_HOURS,
+        help="Spike peaks within this many hours of the simulation start are grouped as initial events.",
+    )
     parser.add_argument("--precip-smooth-hours", type=float, default=PRECIP_SMOOTH_HOURS)
     parser.add_argument(
         "--correlation-smooth-hours",
@@ -222,6 +234,32 @@ def detect_spikes(series: xr.Dataset, args: argparse.Namespace) -> tuple[np.ndar
     )
 
 
+def simulation_start_time(series: xr.Dataset) -> np.datetime64:
+    for attr_name in ("analysis_start", "start_time"):
+        value = series.attrs.get(attr_name)
+        if value:
+            return np.datetime64(value, "s")
+    return series.time.values[0].astype("datetime64[s]")
+
+
+def split_spikes_by_start_time(series: xr.Dataset, spike_indices: np.ndarray, initial_hours: float) -> dict[str, np.ndarray]:
+    if len(spike_indices) == 0:
+        empty = np.asarray([], dtype=int)
+        return {"all": empty, "initial": empty, "later": empty}
+
+    start_time = simulation_start_time(series)
+    cutoff = start_time + np.timedelta64(int(round(initial_hours * 3600.0)), "s")
+    peak_times = series.time.isel(time=spike_indices).values.astype("datetime64[s]")
+    initial_mask = peak_times <= cutoff
+    initial = spike_indices[initial_mask]
+    later = spike_indices[~initial_mask]
+    return {
+        "all": spike_indices,
+        "initial": initial,
+        "later": later,
+    }
+
+
 def collect_lag_pairs(
     series: xr.Dataset,
     spike_indices: np.ndarray,
@@ -262,6 +300,8 @@ def collect_lag_pairs(
 def correlation_row(
     region: dict[str, str],
     experiment: str,
+    event_group_key: str,
+    event_group_label: str,
     lag_hours: float,
     spike_count: int,
     threshold: float,
@@ -283,6 +323,8 @@ def correlation_row(
         "region_key": region["key"],
         "region_name": region["title"],
         "experiment": experiment,
+        "event_group": event_group_key,
+        "event_group_label": event_group_label,
         "lag_hours": float(lag_hours),
         "sign_convention": SIGN_CONVENTION,
         "n_spikes": int(spike_count),
@@ -295,6 +337,7 @@ def correlation_row(
         "precip_std_mm_day": float(np.nanstd(p_samples)) if n_pairs else np.nan,
         "mc_std_mm_day": float(np.nanstd(mc_samples)) if n_pairs else np.nan,
         "event_window_hours": float(args.event_window_hours),
+        "initial_event_hours": float(args.initial_event_hours),
         "precip_smooth_hours_for_detection": float(args.precip_smooth_hours),
         "correlation_smooth_hours": float(args.correlation_smooth_hours),
         "mc_time_mean_hours": float(args.mc_time_mean_hours),
@@ -315,32 +358,44 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
 
 def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str, str]]) -> None:
     experiment = EXPERIMENTS[0]
-    selected = [
-        row
-        for row in rows
-        if row["region_key"] == "all" and row["experiment"] == experiment
-    ]
-    if not selected:
-        raise ValueError("No pooled all-event rows available to plot.")
+    selected_by_group = {}
+    for group_key, group_label, _ in EVENT_GROUPS:
+        selected = [
+            row
+            for row in rows
+            if row["region_key"] == "all"
+            and row["experiment"] == experiment
+            and row["event_group"] == group_key
+        ]
+        if selected:
+            selected_by_group[group_key] = sorted(selected, key=lambda row: float(row["lag_hours"]))
 
-    selected = sorted(selected, key=lambda row: float(row["lag_hours"]))
-    lags = [float(row["lag_hours"]) for row in selected]
-    values = [float(row["pearson_r"]) for row in selected]
-    n_pairs = max(int(row["n_pairs"]) for row in selected)
-    n_spikes = max(int(row["n_spikes"]) for row in selected)
+    if not selected_by_group:
+        raise ValueError("No pooled all-event rows available to plot.")
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
-    ax.plot(
-        lags,
-        values,
-        color="black",
-        marker="o",
-        linewidth=2.2,
-        label=f"All spike events (events={n_spikes}, samples={n_pairs})",
-    )
-    ax.set_title("Dynamically imbalanced: spike-window lag-lead correlation")
+    for group_key, group_label, linestyle in EVENT_GROUPS:
+        selected = selected_by_group.get(group_key)
+        if not selected:
+            continue
+        lags = [float(row["lag_hours"]) for row in selected]
+        values = [float(row["pearson_r"]) for row in selected]
+        n_spikes = max(int(row["n_spikes"]) for row in selected)
+        lag0 = next((row for row in selected if np.isclose(float(row["lag_hours"]), 0.0)), selected[0])
+        n_pairs = int(lag0["n_pairs"])
+        ax.plot(
+            lags,
+            values,
+            color="black",
+            marker="o",
+            linestyle=linestyle,
+            linewidth=2.2,
+            label=f"{group_label} (events={n_spikes}, lag0 samples={n_pairs})",
+        )
+
+    ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation")
     ax.set_xlabel("Lag hours")
     ax.set_ylabel("Pearson r")
     ax.grid(True, linestyle=":", alpha=0.6)
@@ -365,10 +420,11 @@ def main() -> None:
     print(f"  Lag convention  : {SIGN_CONVENTION}")
     print(f"  Lags            : {', '.join(f'{lag:g}' for lag in lags)} h")
     print(f"  Event window    : +/-{0.5 * args.event_window_hours:g} h around each spike")
+    print(f"  Initial split   : peak time <= simulation start + {args.initial_event_hours:g} h")
     print(f"  MC time mean    : {args.mc_time_mean_hours:g} h (0 means cached MCDirect unchanged)")
 
     rows = []
-    pooled_samples: dict[tuple[str, float], tuple[list[float], list[float], int]] = {}
+    pooled_samples: dict[tuple[str, str, float], tuple[list[float], list[float], int]] = {}
 
     for region in regions:
         print(f"\n=== {region['title']} ({region['key']}) ===")
@@ -405,50 +461,59 @@ def main() -> None:
         if len(spike_indices) == 0:
             continue
 
+        spike_groups = split_spikes_by_start_time(
+            loaded["Reanalysis-IC"],
+            spike_indices,
+            args.initial_event_hours,
+        )
+        print(
+            "  Spike split     : "
+            f"all={len(spike_groups['all'])}, "
+            f"initial<={args.initial_event_hours / 24.0:g}d={len(spike_groups['initial'])}, "
+            f"later={len(spike_groups['later'])}"
+        )
+
         for experiment in EXPERIMENTS:
-            lag0_pairs = None
-            for lag in lags:
-                p_samples, mc_samples = collect_lag_pairs(
-                    loaded[experiment],
-                    spike_indices,
-                    float(lag),
-                    args.event_window_hours,
-                    args.correlation_smooth_hours,
-                )
-                if np.isclose(lag, 0.0):
-                    lag0_pairs = len(p_samples)
-                row = correlation_row(
-                    region,
-                    experiment,
-                    float(lag),
-                    len(spike_indices),
-                    threshold,
-                    p_samples,
-                    mc_samples,
-                    args,
-                    cache_files[experiment],
-                )
-                rows.append(row)
+            lag0_pairs_by_group = {}
+            for group_key, _, _ in EVENT_GROUPS:
+                group_spikes = spike_groups[group_key]
+                for lag in lags:
+                    p_samples, mc_samples = collect_lag_pairs(
+                        loaded[experiment],
+                        group_spikes,
+                        float(lag),
+                        args.event_window_hours,
+                        args.correlation_smooth_hours,
+                    )
+                    if np.isclose(lag, 0.0):
+                        lag0_pairs_by_group[group_key] = len(p_samples)
 
-                key = (experiment, float(lag))
-                if key not in pooled_samples:
-                    pooled_samples[key] = ([], [], 0)
-                pooled_p, pooled_mc, pooled_spikes = pooled_samples[key]
-                pooled_p.extend(p_samples.tolist())
-                pooled_mc.extend(mc_samples.tolist())
-                pooled_samples[key] = (pooled_p, pooled_mc, pooled_spikes + len(spike_indices))
+                    key = (group_key, experiment, float(lag))
+                    if key not in pooled_samples:
+                        pooled_samples[key] = ([], [], 0)
+                    pooled_p, pooled_mc, pooled_spikes = pooled_samples[key]
+                    pooled_p.extend(p_samples.tolist())
+                    pooled_mc.extend(mc_samples.tolist())
+                    pooled_samples[key] = (pooled_p, pooled_mc, pooled_spikes + len(group_spikes))
 
+            lag0_text = ", ".join(
+                f"{group_key}={lag0_pairs_by_group.get(group_key, 0)}"
+                for group_key, _, _ in EVENT_GROUPS
+            )
             print(
                 f"  {experiment}: spike events={len(spike_indices)}, "
-                f"lag-0 paired samples={lag0_pairs if lag0_pairs is not None else 0}"
+                f"lag-0 paired samples ({lag0_text})"
             )
 
-    for (experiment, lag), (p_values, mc_values, pooled_spikes) in sorted(pooled_samples.items()):
+    group_labels = {group_key: group_label for group_key, group_label, _ in EVENT_GROUPS}
+    for (group_key, experiment, lag), (p_values, mc_values, pooled_spikes) in sorted(pooled_samples.items()):
         pooled_region = {"key": "all", "title": "All regions"}
         rows.append(
             correlation_row(
                 pooled_region,
                 experiment,
+                group_key,
+                group_labels[group_key],
                 lag,
                 pooled_spikes,
                 np.nan,
@@ -468,14 +533,18 @@ def main() -> None:
 
     print("\nLag-0 pooled sample counts")
     for experiment in EXPERIMENTS:
-        matches = [
-            row
-            for row in rows
-            if row["region_key"] == "all" and row["experiment"] == experiment and np.isclose(row["lag_hours"], 0.0)
-        ]
-        if matches:
-            row = matches[0]
-            print(f"  {experiment}: spikes={row['n_spikes']}, paired samples={row['n_pairs']}")
+        for group_key, group_label, _ in EVENT_GROUPS:
+            matches = [
+                row
+                for row in rows
+                if row["region_key"] == "all"
+                and row["experiment"] == experiment
+                and row["event_group"] == group_key
+                and np.isclose(row["lag_hours"], 0.0)
+            ]
+            if matches:
+                row = matches[0]
+                print(f"  {experiment} {group_label}: spikes={row['n_spikes']}, paired samples={row['n_pairs']}")
 
 
 if __name__ == "__main__":
