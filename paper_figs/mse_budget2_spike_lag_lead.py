@@ -44,9 +44,9 @@ REGIONS = [
 
 EXPERIMENTS = ("Reanalysis-IC",)
 EVENT_GROUPS = (
-    ("all", "All spike events", "solid"),
-    ("initial", "Initial events <= 3 days", "dashed"),
-    ("later", "Events > 3 days", "dotted"),
+    ("all", "All spike events", "black", "o", "solid"),
+    ("initial", "Initial events <= 3 days", "tab:blue", "s", "dashed"),
+    ("later", "Events > 3 days", "tab:orange", "^", "dashdot"),
 )
 CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_points_sync")
 LEGACY_WTP_CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
@@ -359,7 +359,7 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
 def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str, str]]) -> None:
     experiment = EXPERIMENTS[0]
     selected_by_group = {}
-    for group_key, group_label, _ in EVENT_GROUPS:
+    for group_key, group_label, *_ in EVENT_GROUPS:
         selected = [
             row
             for row in rows
@@ -373,10 +373,10 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
     if not selected_by_group:
         raise ValueError("No pooled all-event rows available to plot.")
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
-    for group_key, group_label, linestyle in EVENT_GROUPS:
+    for group_key, group_label, color, marker, linestyle in EVENT_GROUPS:
         selected = selected_by_group.get(group_key)
         if not selected:
             continue
@@ -388,21 +388,22 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
         ax.plot(
             lags,
             values,
-            color="black",
-            marker="o",
+            color=color,
+            marker=marker,
             linestyle=linestyle,
-            linewidth=2.2,
+            linewidth=2.5,
+            markersize=6,
             label=f"{group_label} (events={n_spikes}, lag0 samples={n_pairs})",
         )
 
-    ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation")
+    ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation", fontsize=12)
     ax.set_xlabel("Lag hours")
     ax.set_ylabel("Pearson r")
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_ylim(-1.0, 1.0)
-    ax.legend(loc="best", frameon=False)
-    fig.suptitle("P(t) vs MC(t + lag)")
-    fig.tight_layout()
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), frameon=False, ncol=1)
+    fig.suptitle("P(t) vs MC(t + lag)", fontsize=14)
+    fig.tight_layout(rect=[0, 0.06, 1, 0.95])
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -475,7 +476,7 @@ def main() -> None:
 
         for experiment in EXPERIMENTS:
             lag0_pairs_by_group = {}
-            for group_key, _, _ in EVENT_GROUPS:
+            for group_key, *_ in EVENT_GROUPS:
                 group_spikes = spike_groups[group_key]
                 for lag in lags:
                     p_samples, mc_samples = collect_lag_pairs(
@@ -498,14 +499,14 @@ def main() -> None:
 
             lag0_text = ", ".join(
                 f"{group_key}={lag0_pairs_by_group.get(group_key, 0)}"
-                for group_key, _, _ in EVENT_GROUPS
+                for group_key, *_ in EVENT_GROUPS
             )
             print(
                 f"  {experiment}: spike events={len(spike_indices)}, "
                 f"lag-0 paired samples ({lag0_text})"
             )
 
-    group_labels = {group_key: group_label for group_key, group_label, _ in EVENT_GROUPS}
+    group_labels = {group_key: group_label for group_key, group_label, *_ in EVENT_GROUPS}
     for (group_key, experiment, lag), (p_values, mc_values, pooled_spikes) in sorted(pooled_samples.items()):
         pooled_region = {"key": "all", "title": "All regions"}
         rows.append(
@@ -533,7 +534,7 @@ def main() -> None:
 
     print("\nLag-0 pooled sample counts")
     for experiment in EXPERIMENTS:
-        for group_key, group_label, _ in EVENT_GROUPS:
+        for group_key, group_label, *_ in EVENT_GROUPS:
             matches = [
                 row
                 for row in rows
