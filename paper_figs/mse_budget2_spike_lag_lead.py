@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
+from scipy.interpolate import PchipInterpolator
 import xarray as xr
 
 import mse_budget as mb
@@ -32,6 +33,7 @@ EVENT_WINDOW_HOURS = 24.0
 PRECIP_SMOOTH_HOURS = 6.0
 INITIAL_EVENT_HOURS = 72.0
 SIGNIFICANCE_LEVEL = 0.05
+MC_LAG_INTERPOLATION = "pchip"
 SECONDS_PER_DAY = 86400.0
 
 REGIONS = [
@@ -108,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Optional centered time-mean approximation applied to cached instantaneous MC before correlation.",
+    )
+    parser.add_argument(
+        "--mc-lag-interpolation",
+        choices=("pchip", "linear", "nearest"),
+        default=MC_LAG_INTERPOLATION,
+        help="Method used to sample cached MC at t + lag for off-cadence lag points.",
     )
     parser.add_argument("--output-csv", type=Path, default=CSV_PATH)
     parser.add_argument("--output-figure", type=Path, default=FIGURE_PATH)
@@ -261,12 +269,55 @@ def split_spikes_by_start_time(series: xr.Dataset, spike_indices: np.ndarray, in
     }
 
 
+def unique_sorted_series(times: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    order = np.argsort(times)
+    times = times[order]
+    values = values[order]
+    unique_times, inverse = np.unique(times, return_inverse=True)
+    if unique_times.size == times.size:
+        return times, values
+
+    unique_values = np.full(unique_times.shape, np.nan, dtype=float)
+    for idx in range(unique_times.size):
+        unique_values[idx] = float(np.nanmean(values[inverse == idx]))
+    return unique_times, unique_values
+
+
+def make_mc_sampler(source_times: np.ndarray, source_mc: np.ndarray, method: str):
+    source_times, source_mc = unique_sorted_series(source_times, source_mc)
+
+    if method == "nearest":
+        def sample_nearest(target_times: np.ndarray) -> np.ndarray:
+            idx = np.searchsorted(source_times, target_times)
+            idx = np.clip(idx, 1, source_times.size - 1)
+            left = source_times[idx - 1]
+            right = source_times[idx]
+            nearest_idx = np.where(np.abs(target_times - left) <= np.abs(right - target_times), idx - 1, idx)
+            return source_mc[nearest_idx]
+
+        return source_times, sample_nearest
+
+    if method == "linear" or source_times.size < 3:
+        def sample_linear(target_times: np.ndarray) -> np.ndarray:
+            return np.interp(target_times, source_times, source_mc)
+
+        return source_times, sample_linear
+
+    interpolator = PchipInterpolator(source_times, source_mc, extrapolate=False)
+
+    def sample_pchip(target_times: np.ndarray) -> np.ndarray:
+        return np.asarray(interpolator(target_times), dtype=float)
+
+    return source_times, sample_pchip
+
+
 def collect_lag_pairs(
     series: xr.Dataset,
     spike_indices: np.ndarray,
     lag_hours: float,
     event_window_hours: float,
     correlation_smooth_hours: float,
+    mc_lag_interpolation: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     ds = smoothed_pair_dataset(series, correlation_smooth_hours)
     times = ds.time.values.astype("datetime64[s]").astype(np.float64)
@@ -282,9 +333,7 @@ def collect_lag_pairs(
 
     source_times = times[finite_mc]
     source_mc = mc[finite_mc]
-    order = np.argsort(source_times)
-    source_times = source_times[order]
-    source_mc = source_mc[order]
+    source_times, sample_mc = make_mc_sampler(source_times, source_mc, mc_lag_interpolation)
     lag_seconds = lag_hours * 3600.0
 
     p_samples = []
@@ -299,7 +348,7 @@ def collect_lag_pairs(
             if not np.isfinite(p_time) or mc_time < source_times[0] or mc_time > source_times[-1]:
                 continue
             p_value = precip[p_idx]
-            mc_value = np.interp(mc_time, source_times, source_mc)
+            mc_value = sample_mc(np.asarray([mc_time], dtype=float))[0]
             if np.isfinite(p_value) and np.isfinite(mc_value):
                 p_samples.append(float(p_value))
                 mc_samples.append(float(mc_value))
@@ -351,7 +400,7 @@ def correlation_row(
         "precip_smooth_hours_for_detection": float(args.precip_smooth_hours),
         "correlation_smooth_hours": float(args.correlation_smooth_hours),
         "mc_time_mean_hours": float(args.mc_time_mean_hours),
-        "mc_lag_sampling": "linear interpolation of cached MC to t + lag",
+        "mc_lag_sampling": f"{args.mc_lag_interpolation} interpolation of cached MC to t + lag",
         "cache_file": str(cache_file),
     }
 
@@ -455,7 +504,7 @@ def main() -> None:
     print(f"  Event window    : +/-{0.5 * args.event_window_hours:g} h around each spike")
     print(f"  Initial split   : peak time <= simulation start + {args.initial_event_hours:g} h")
     print(f"  MC time mean    : {args.mc_time_mean_hours:g} h (0 means cached MCDirect unchanged)")
-    print("  MC lag sampling : linear interpolation of cached MC to t + lag")
+    print(f"  MC lag sampling : {args.mc_lag_interpolation} interpolation of cached MC to t + lag")
 
     rows = []
     pooled_samples: dict[tuple[str, str, float], tuple[list[float], list[float], int]] = {}
@@ -518,6 +567,7 @@ def main() -> None:
                         float(lag),
                         args.event_window_hours,
                         args.correlation_smooth_hours,
+                        args.mc_lag_interpolation,
                     )
                     if np.isclose(lag, 0.0):
                         lag0_pairs_by_group[group_key] = len(p_samples)
