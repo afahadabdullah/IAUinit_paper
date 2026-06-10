@@ -41,7 +41,7 @@ REGIONS = [
     {"key": "tao", "title": "Tropical Atlantic Ocean"},
 ]
 
-EXPERIMENTS = ("Reanalysis-IC", "IAU-IC")
+EXPERIMENTS = ("Reanalysis-IC",)
 CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_points_sync")
 LEGACY_WTP_CACHE_DIR = Path(__file__).with_name("cache_mse_budget2_direct_mc_wtp_point_sync")
 CSV_PATH = Path(__file__).with_name("mse_budget2_spike_lag_lead_correlation.csv")
@@ -73,8 +73,8 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help="Comma-separated region keys to analyze, or 'all'.",
     )
-    parser.add_argument("--lag-min-hours", type=float, default=-24.0)
-    parser.add_argument("--lag-max-hours", type=float, default=24.0)
+    parser.add_argument("--lag-min-hours", type=float, default=-12.0)
+    parser.add_argument("--lag-max-hours", type=float, default=12.0)
     parser.add_argument("--lag-step-hours", type=float, default=6.0)
     parser.add_argument(
         "--lag-hours",
@@ -209,12 +209,10 @@ def smoothed_pair_dataset(ds: xr.Dataset, smooth_hours: float) -> xr.Dataset:
     return out
 
 
-def detect_spikes(me_series: xr.Dataset, rp_series: xr.Dataset, args: argparse.Namespace) -> tuple[np.ndarray, float]:
-    me_detect = smoothed_pair_dataset(me_series, args.precip_smooth_hours)
-    rp_detect = smoothed_pair_dataset(rp_series, args.precip_smooth_hours)
-    me_detect, rp_detect = xr.align(me_detect, rp_detect, join="inner")
-    reference_precip = xr.where(me_detect["Precip"] >= rp_detect["Precip"], me_detect["Precip"], rp_detect["Precip"])
-    dt_hours = mb.infer_time_step_hours(reference_precip)
+def detect_spikes(series: xr.Dataset, args: argparse.Namespace) -> tuple[np.ndarray, float]:
+    detect = smoothed_pair_dataset(series, args.precip_smooth_hours)
+    reference_precip = detect["Precip"]
+    dt_hours = mb.infer_time_step_hours(detect)
     min_sep_steps = max(1, int(round(MIN_PEAK_SEPARATION_HOURS / max(dt_hours, 1.0e-6))))
     return mb.detect_precip_spikes(
         reference_precip,
@@ -316,41 +314,39 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str, str]]) -> None:
-    experiments = list(EXPERIMENTS)
-    colors = {region["key"]: color for region, color in zip(regions, plt.cm.tab10.colors)}
-    colors["all"] = "black"
+    experiment = EXPERIMENTS[0]
+    selected = [
+        row
+        for row in rows
+        if row["region_key"] == "all" and row["experiment"] == experiment
+    ]
+    if not selected:
+        raise ValueError("No pooled all-event rows available to plot.")
 
-    fig, axes = plt.subplots(1, len(experiments), figsize=(12, 4), sharey=True)
-    if len(experiments) == 1:
-        axes = [axes]
+    selected = sorted(selected, key=lambda row: float(row["lag_hours"]))
+    lags = [float(row["lag_hours"]) for row in selected]
+    values = [float(row["pearson_r"]) for row in selected]
+    n_pairs = max(int(row["n_pairs"]) for row in selected)
+    n_spikes = max(int(row["n_spikes"]) for row in selected)
 
-    for ax, experiment in zip(axes, experiments):
-        ax.axhline(0, color="0.6", linewidth=0.8)
-        ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
-        for region in [*regions, {"key": "all", "title": "All regions"}]:
-            selected = [
-                row
-                for row in rows
-                if row["region_key"] == region["key"] and row["experiment"] == experiment
-            ]
-            if not selected:
-                continue
-            selected = sorted(selected, key=lambda row: float(row["lag_hours"]))
-            lags = [float(row["lag_hours"]) for row in selected]
-            values = [float(row["pearson_r"]) for row in selected]
-            n_pairs = max(int(row["n_pairs"]) for row in selected)
-            if region["key"] == "all":
-                ax.plot(lags, values, color="black", linewidth=2.2, label=f"All (n={n_pairs})")
-            else:
-                ax.plot(lags, values, marker="o", color=colors[region["key"]], linewidth=1.2, label=region["key"].upper())
-
-        ax.set_title(experiment)
-        ax.set_xlabel("Lag hours")
-        ax.grid(True, linestyle=":", alpha=0.6)
-        ax.set_ylim(-1.0, 1.0)
-    axes[0].set_ylabel("Pearson r")
-    axes[-1].legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
-    fig.suptitle("Spike-window lag-lead correlation: P(t) vs MC(t + lag)")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.axhline(0, color="0.6", linewidth=0.8)
+    ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
+    ax.plot(
+        lags,
+        values,
+        color="black",
+        marker="o",
+        linewidth=2.2,
+        label=f"All spike events (events={n_spikes}, samples={n_pairs})",
+    )
+    ax.set_title("Dynamically imbalanced: spike-window lag-lead correlation")
+    ax.set_xlabel("Lag hours")
+    ax.set_ylabel("Pearson r")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_ylim(-1.0, 1.0)
+    ax.legend(loc="best", frameon=False)
+    fig.suptitle("P(t) vs MC(t + lag)")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
@@ -401,12 +397,7 @@ def main() -> None:
         if not loaded:
             continue
 
-        loaded["Reanalysis-IC"], loaded["IAU-IC"] = xr.align(
-            loaded["Reanalysis-IC"],
-            loaded["IAU-IC"],
-            join="inner",
-        )
-        spike_indices, threshold = detect_spikes(loaded["Reanalysis-IC"], loaded["IAU-IC"], args)
+        spike_indices, threshold = detect_spikes(loaded["Reanalysis-IC"], args)
         print(
             f"  Spikes detected : {len(spike_indices)} above q={args.spike_quantile:.2f} "
             f"(threshold={threshold * SECONDS_PER_DAY:.2f} mm day-1)"
