@@ -31,6 +31,7 @@ MIN_PEAK_SEPARATION_HOURS = 24.0
 EVENT_WINDOW_HOURS = 24.0
 PRECIP_SMOOTH_HOURS = 6.0
 INITIAL_EVENT_HOURS = 72.0
+SIGNIFICANCE_LEVEL = 0.05
 SECONDS_PER_DAY = 86400.0
 
 REGIONS = [
@@ -366,16 +367,6 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     print(f"\nWrote {path}")
 
 
-def format_pvalue(value: float) -> str:
-    if not np.isfinite(value):
-        return "p=nan"
-    if value < 0.001:
-        return "p<0.001"
-    if value < 0.1:
-        return f"p={value:.3f}"
-    return f"p={value:.2f}"
-
-
 def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str, str]]) -> None:
     experiment = EXPERIMENTS[0]
     selected_by_group = {}
@@ -396,44 +387,52 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
-    label_offsets = {"all": 9, "initial": -15, "later": 20}
-    label_va = {"all": "bottom", "initial": "top", "later": "bottom"}
     for group_key, group_label, color, marker, linestyle in EVENT_GROUPS:
         selected = selected_by_group.get(group_key)
         if not selected:
             continue
-        lags = [float(row["lag_hours"]) for row in selected]
-        values = [float(row["pearson_r"]) for row in selected]
-        pvalues = [float(row["pvalue"]) for row in selected]
+        lags = np.asarray([float(row["lag_hours"]) for row in selected], dtype=float)
+        values = np.asarray([float(row["pearson_r"]) for row in selected], dtype=float)
+        pvalues = np.asarray([float(row["pvalue"]) for row in selected], dtype=float)
         ax.plot(
             lags,
             values,
             color=color,
-            marker=marker,
             linestyle=linestyle,
-            linewidth=2.5,
-            markersize=6,
+            linewidth=2.4,
+            alpha=0.75,
             label=group_label,
         )
-        for lag, value, pvalue in zip(lags, values, pvalues):
-            if not np.isfinite(value):
-                continue
-            ax.annotate(
-                format_pvalue(pvalue),
-                xy=(lag, value),
-                xytext=(0, label_offsets[group_key]),
-                textcoords="offset points",
-                ha="center",
-                va=label_va[group_key],
-                fontsize=7,
-                color=color,
-            )
+        finite = np.isfinite(lags) & np.isfinite(values)
+        significant = finite & np.isfinite(pvalues) & (pvalues < SIGNIFICANCE_LEVEL)
+        nonsignificant = finite & ~significant
+        ax.scatter(
+            lags[nonsignificant],
+            values[nonsignificant],
+            marker=marker,
+            s=58,
+            color=color,
+            alpha=0.25,
+            edgecolors="none",
+            zorder=3,
+        )
+        ax.scatter(
+            lags[significant],
+            values[significant],
+            marker=marker,
+            s=110,
+            color=color,
+            alpha=1.0,
+            edgecolors="black",
+            linewidths=1.4,
+            zorder=4,
+        )
 
     ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation", fontsize=12)
     ax.set_xlabel("Lag hours")
     ax.set_ylabel("Pearson r")
     ax.grid(True, linestyle=":", alpha=0.6)
-    ax.set_ylim(-1.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
     ax.legend(loc="lower center", frameon=True, framealpha=0.9, facecolor="white", edgecolor="0.8")
     fig.suptitle("P(t) vs MC(t + lag)", fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
