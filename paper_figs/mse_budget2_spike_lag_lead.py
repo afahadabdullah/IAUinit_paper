@@ -375,7 +375,7 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
     if not selected_by_group:
         raise ValueError("No pooled all-event rows available to plot.")
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(11, 8.5))
     ax.axhline(0, color="0.6", linewidth=0.8)
     ax.axvline(0, color="0.6", linewidth=0.8, linestyle="--")
     for group_key, group_label, color, marker, linestyle in EVENT_GROUPS:
@@ -419,14 +419,13 @@ def plot_rows(path: Path, rows: list[dict[str, object]], regions: list[dict[str,
             zorder=4,
         )
 
-    ax.set_title("Dynamically imbalanced: all-region spike lag-lead correlation", fontsize=12)
+    ax.set_title("(C) P(t) vs MC (t + lag/lead) correlation", fontsize=16, fontweight="bold")
     ax.set_xlabel("Lag hours")
     ax.set_ylabel("Pearson r")
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_ylim(0.0, 1.0)
     ax.legend(loc="lower center", frameon=True, framealpha=0.9, facecolor="white", edgecolor="0.8")
-    fig.suptitle("P(t) vs MC(t + lag)", fontsize=14)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
