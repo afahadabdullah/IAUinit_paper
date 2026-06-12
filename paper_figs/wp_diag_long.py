@@ -531,7 +531,7 @@ def plot_sst_mc_precip(
     ax3 = ax.twinx()
     ax3.spines["right"].set_position(("axes", 1.22))
     ax3.spines["right"].set_color(color_pr)
-    precip_mm_day = (mc_ds["Precip"] * SECONDS_PER_DAY) if mc_ds is not None else case["precip"]
+    precip_mm_day = case["precip"]
     line3 = line(ax3, precip_mm_day, color=color_pr, label="Precip", linewidth=1.6, alpha=0.65)
     ax3.set_ylabel("Precip (mm day-1)", color=color_pr)
     ax3.tick_params(axis="y", labelcolor=color_pr)
@@ -637,10 +637,10 @@ def plot_figure(
         plt.subplot(2, ncols, ncols + 1),
         balanced,
         mc_data["balanced"] if has_mc else None,
-        "(e) SST tendency, MC, and Precip",
+        "(d) SST tendency, MC, and Precip",
     )
-    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, "(f) Heat Fluxes")
-    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(g) Omega500 and CAPE")
+    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, "(e) Heat Fluxes")
+    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(f) Omega500 and CAPE")
 
     plt.tight_layout(rect=[0.075, 0.02, 0.92, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
