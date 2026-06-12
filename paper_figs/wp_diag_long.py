@@ -6,7 +6,7 @@ dynamically imbalanced and dynamically balanced diagnostics used for
 WP_diag_long.png.
 
 Optionally loads moisture-convergence cache files produced by
-mse_budget_wp_2wk.py and adds MC + Precip panels as a 4th column.
+mse_budget_wp_2wk.py and overlays MC and precipitation with SST tendency.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import xarray as xr
 
 PRECIP_CANDIDATES = ("PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
 CAPE_VARS = ("CAPE", "T", "OMEGA")
-SURF_VARS = ("SHFX", "TA", "TS_FOUND", "PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
+SURF_VARS = ("SHFX", "TS_FOUND", "PRECTOT", "PRECTOTCORR", "PR", "PRECCON", "PRECLS")
 MC_TIME_MEAN_HOURS = 3.0
 
 
@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--month", default="200505", help="YYYYMM holding subdirectory.")
     parser.add_argument("--start", default="2005-05-06", help="Start date.")
-    parser.add_argument("--end", default="2005-05-28", help="End date.")
+    parser.add_argument("--end", default="2005-05-14", help="End date.")
     parser.add_argument("--lon", type=float, default=143.0, help="Longitude for the diagnostic point.")
     parser.add_argument("--lat", type=float, default=-1.0, help="Latitude for the diagnostic point.")
     parser.add_argument(
@@ -237,13 +237,12 @@ def load_case(
     )
 
     try:
-        progress(f"{exp}: computing CAPE, omega, temperature, flux, SST, and precipitation time series")
+        progress(f"{exp}: computing CAPE, omega, flux, SST, and precipitation time series")
         cape = point_series(cape_ds["CAPE"]).compute()
         temp = point_series(cape_ds["T"]).compute()
         omega = point_series(cape_ds["OMEGA"]).compute()
 
         shfx = point_series(surf_ds["SHFX"]).compute()
-        air_temp = point_series(surf_ds["TA"]).compute()
         sst = point_series(surf_ds["TS_FOUND"]).compute()
         sst_tendency = sst.diff("time").compute()
         precip = point_series(precip_from_surf(surf_ds)).compute()
@@ -261,7 +260,6 @@ def load_case(
         "precip": precip,
         "shfx": shfx,
         "vertical_heat_flux": vertical_heat_flux,
-        "air_temp": air_temp,
         "sst_tendency": sst_tendency,
     }
 
@@ -498,30 +496,49 @@ def line(ax: plt.Axes, da: xr.DataArray, **kwargs: object) -> list[object]:
     return ax.plot(da.time.values, da.values, **kwargs)
 
 
-def plot_sst_air(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> None:
+def plot_sst_mc_precip(
+    ax: plt.Axes,
+    case: dict[str, xr.DataArray],
+    mc_ds: xr.Dataset | None,
+    title: str,
+) -> None:
     ax.set_title(title, fontsize=12, fontweight="bold")
-    color1 = "green"
-    color2 = "darkblue"
+    color_sst = "tab:green"
+    color_mc = "tab:blue"
+    color_pr = "0.25"
 
     line1 = line(
         ax,
         case["sst_tendency"],
-        color=color1,
-        label="SST tendencies",
+        color=color_sst,
+        label="SST tendency",
     )
-    ax.set_ylabel("SST tendencies (K/3hr)", color=color1)
-    ax.tick_params(axis="y", labelcolor=color1)
+    ax.set_ylabel("SST tendency (K/3hr)", color=color_sst)
+    ax.tick_params(axis="y", labelcolor=color_sst)
     ax.set_ylim(-0.1, 1.1)
     style_time_axis(ax)
 
+    lines = line1
     ax2 = ax.twinx()
-    line2 = line(ax2, case["air_temp"], color=color2, label="Air Temp")
-    ax2.set_ylabel("Air Temperature (K)", color=color2)
-    ax2.tick_params(axis="y", labelcolor=color2)
-    ax2.set_ylim(298, 302)
+    if mc_ds is not None:
+        mc_mm_day = mc_ds["MCDirect"] * SECONDS_PER_DAY
+        line2 = line(ax2, mc_mm_day, color=color_mc, label="MC", linewidth=1.7)
+        lines += line2
+    ax2.set_ylabel("MC (mm day-1)", color=color_mc)
+    ax2.tick_params(axis="y", labelcolor=color_mc)
+    ax2.set_ylim(-10, 120)
 
-    lines = line1 + line2
-    ax.legend(lines, [line.get_label() for line in lines], loc="best")
+    ax3 = ax.twinx()
+    ax3.spines["right"].set_position(("axes", 1.22))
+    ax3.spines["right"].set_color(color_pr)
+    precip_mm_day = (mc_ds["Precip"] * SECONDS_PER_DAY) if mc_ds is not None else case["precip"]
+    line3 = line(ax3, precip_mm_day, color=color_pr, label="Precip", linewidth=1.6, alpha=0.65)
+    ax3.set_ylabel("Precip (mm day-1)", color=color_pr)
+    ax3.tick_params(axis="y", labelcolor=color_pr)
+    ax3.set_ylim(0, 120)
+    lines += line3
+
+    ax.legend(lines, [ln.get_label() for ln in lines], loc="upper right")
 
 
 def plot_heat_fluxes(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> None:
@@ -550,11 +567,10 @@ def plot_heat_fluxes(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) ->
     ax.legend(lines, [line.get_label() for line in lines], loc="best")
 
 
-def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> None:
+def plot_omega_cape(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> None:
     ax.set_title(title, fontsize=12, fontweight="bold")
     color1 = "green"
     color2 = "darkblue"
-    color3 = "0.45"
 
     line1 = line(ax, case["cape"], color=color1, label="CAPE")
     ax.set_ylabel("CAPE J kg-1", color=color1)
@@ -568,48 +584,8 @@ def plot_omega_cape_precip(ax: plt.Axes, case: dict[str, xr.DataArray], title: s
     ax2.tick_params(axis="y", labelcolor=color2)
     ax2.set_ylim(-1.2, 2.1)
 
-    ax3 = ax.twinx()
-    ax3.spines["right"].set_position(("axes", 1.28))
-    ax3.spines["right"].set_color(color3)
-    line3 = line(
-        ax3,
-        case["precip"],
-        color=color3,
-        label="Precip",
-        linewidth=1.6,
-        alpha=0.55,
-    )
-    ax3.set_ylabel("Precip (mm day-1)", color=color3)
-    ax3.tick_params(axis="y", labelcolor=color3)
-    ax3.set_ylim(0, 120)
-
-    lines = line1 + line2 + line3
-    ax.legend(lines, [line.get_label() for line in lines], loc="upper right")
-
-
-def plot_mc_precip(ax: plt.Axes, mc_ds: xr.Dataset, title: str) -> None:
-    """Plot moisture convergence with precipitation overlay."""
-    ax.set_title(title, fontsize=12, fontweight="bold")
-    color_mc = "green"
-    color_pr = "darkblue"
-
-    mc_mm_day = mc_ds["MCDirect"] * SECONDS_PER_DAY
-    precip_mm_day = mc_ds["Precip"] * SECONDS_PER_DAY
-
-    line1 = line(ax, mc_mm_day, color=color_mc, label="MC")
-    ax.set_ylabel("MC (mm day⁻¹)", color=color_mc)
-    ax.set_ylim(-10, 120)
-    ax.tick_params(axis="y", labelcolor=color_mc)
-    style_time_axis(ax)
-
-    ax2 = ax.twinx()
-    line2 = line(ax2, precip_mm_day, color=color_pr, label="Precip", alpha=0.55, linewidth=1.6)
-    ax2.set_ylabel("Precip (mm day⁻¹)", color=color_pr)
-    ax2.set_ylim(-10, 120)
-    ax2.tick_params(axis="y", labelcolor=color_pr)
-
     lines = line1 + line2
-    ax.legend(lines, [ln.get_label() for ln in lines], loc="upper right")
+    ax.legend(lines, [line.get_label() for line in lines], loc="upper right")
 
 
 def plot_figure(
@@ -619,11 +595,10 @@ def plot_figure(
     mc_data: dict[str, xr.Dataset] | None = None,
 ) -> None:
     has_mc = mc_data is not None
-    ncols = 4 if has_mc else 3
-    figw = 16 if has_mc else 12
+    ncols = 3
 
-    progress(f"Plotting figure to {output} ({'with' if has_mc else 'without'} MC panels, {ncols} columns)")
-    fig = plt.figure(figsize=(figw, 6))
+    progress(f"Plotting figure to {output} ({'with' if has_mc else 'without'} MC overlays, {ncols} columns)")
+    fig = plt.figure(figsize=(14, 6))
     fig.text(
         0.025,
         0.75,
@@ -648,23 +623,28 @@ def plot_figure(
     )
 
     # Row 1: imbalanced
-    plot_sst_air(plt.subplot(2, ncols, 1), imbalanced, "(a) SST tendencies and Air Temp")
+    plot_sst_mc_precip(
+        plt.subplot(2, ncols, 1),
+        imbalanced,
+        mc_data["imbalanced"] if has_mc else None,
+        "(a) SST tendency, MC, and Precip",
+    )
     plot_heat_fluxes(plt.subplot(2, ncols, 2), imbalanced, "(b) Heat Fluxes")
-    plot_omega_cape_precip(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500, CAPE, and Precip")
-    if has_mc:
-        plot_mc_precip(plt.subplot(2, ncols, 4), mc_data["imbalanced"], "(d) MC and Precip")
+    plot_omega_cape(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500 and CAPE")
 
     # Row 2: balanced
-    bal_labels = ["(d)", "(e)", "(f)"] if not has_mc else ["(e)", "(f)", "(g)"]
-    plot_sst_air(plt.subplot(2, ncols, ncols + 1), balanced, f"{bal_labels[0]} SST tendencies and Air Temp")
-    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, f"{bal_labels[1]} Heat Fluxes")
-    plot_omega_cape_precip(plt.subplot(2, ncols, ncols + 3), balanced, f"{bal_labels[2]} Omega500, CAPE, and Precip")
-    if has_mc:
-        plot_mc_precip(plt.subplot(2, ncols, ncols + 4), mc_data["balanced"], "(h) MC and Precip")
+    plot_sst_mc_precip(
+        plt.subplot(2, ncols, ncols + 1),
+        balanced,
+        mc_data["balanced"] if has_mc else None,
+        "(e) SST tendency, MC, and Precip",
+    )
+    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, "(f) Heat Fluxes")
+    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(g) Omega500 and CAPE")
 
-    plt.tight_layout(rect=[0.075, 0.02, 0.98, 0.96])
+    plt.tight_layout(rect=[0.075, 0.02, 0.92, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output, dpi=200)
+    plt.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
