@@ -600,7 +600,7 @@ def plot_omega_cape(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> 
     ax2 = ax.twinx()
     line2 = line(ax2, case["omega"], color=color2, label="Omega500")
     ax2.set_ylabel("Omega500", color=color2)
-    ax2.yaxis.set_label_coords(1.12, 0.5)
+    ax2.yaxis.set_label_coords(1.16, 0.5)
     ax2.tick_params(axis="y", labelcolor=color2)
     ax2.set_ylim(-1.2, 2.1)
 
