@@ -492,6 +492,35 @@ def style_time_axis(ax: plt.Axes) -> None:
     ax.grid(True, linestyle="--", alpha=0.6)
 
 
+def common_time_bounds(
+    cases: list[dict[str, xr.DataArray]],
+    mc_data: dict[str, xr.Dataset] | None = None,
+) -> tuple[np.datetime64, np.datetime64] | None:
+    time_values: list[np.ndarray] = []
+    for case in cases:
+        for da in case.values():
+            if "time" in da.coords and da.sizes.get("time", 0) > 0:
+                time_values.append(np.asarray(da.time.values, dtype="datetime64[ns]"))
+    if mc_data is not None:
+        for ds in mc_data.values():
+            if "time" in ds.coords and ds.sizes.get("time", 0) > 0:
+                time_values.append(np.asarray(ds.time.values, dtype="datetime64[ns]"))
+    if not time_values:
+        return None
+    all_times = np.concatenate(time_values)
+    return all_times.min(), all_times.max()
+
+
+def apply_common_time_axis(
+    axes: list[plt.Axes],
+    xlim: tuple[np.datetime64, np.datetime64] | None,
+) -> None:
+    for ax in axes:
+        style_time_axis(ax)
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+
+
 def line(ax: plt.Axes, da: xr.DataArray, **kwargs: object) -> list[object]:
     return ax.plot(da.time.values, da.values, **kwargs)
 
@@ -627,25 +656,31 @@ def plot_figure(
         color="orange",
     )
 
+    axes: list[plt.Axes] = []
+
     # Row 1: imbalanced
-    plot_sst_mc(
-        plt.subplot(2, ncols, 1),
-        imbalanced,
-        mc_data["imbalanced"] if has_mc else None,
-        "(a) SST tendency and MC",
-    )
-    plot_heat_fluxes(plt.subplot(2, ncols, 2), imbalanced, "(b) Heat Fluxes")
-    plot_omega_cape(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500, CAPE, and Precip")
+    ax = plt.subplot(2, ncols, 1)
+    plot_omega_cape(ax, imbalanced, "(a) Omega500, CAPE, and Precip")
+    axes.append(ax)
+    ax = plt.subplot(2, ncols, 2)
+    plot_heat_fluxes(ax, imbalanced, "(b) Heat Fluxes")
+    axes.append(ax)
+    ax = plt.subplot(2, ncols, 3)
+    plot_sst_mc(ax, imbalanced, mc_data["imbalanced"] if has_mc else None, "(c) SST tendency and MC")
+    axes.append(ax)
 
     # Row 2: balanced
-    plot_sst_mc(
-        plt.subplot(2, ncols, ncols + 1),
-        balanced,
-        mc_data["balanced"] if has_mc else None,
-        "(d) SST tendency and MC",
-    )
-    plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, "(e) Heat Fluxes")
-    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(f) Omega500, CAPE, and Precip")
+    ax = plt.subplot(2, ncols, ncols + 1)
+    plot_omega_cape(ax, balanced, "(d) Omega500, CAPE, and Precip")
+    axes.append(ax)
+    ax = plt.subplot(2, ncols, ncols + 2)
+    plot_heat_fluxes(ax, balanced, "(e) Heat Fluxes")
+    axes.append(ax)
+    ax = plt.subplot(2, ncols, ncols + 3)
+    plot_sst_mc(ax, balanced, mc_data["balanced"] if has_mc else None, "(f) SST tendency and MC")
+    axes.append(ax)
+
+    apply_common_time_axis(axes, common_time_bounds([imbalanced, balanced], mc_data if has_mc else None))
 
     plt.tight_layout(rect=[0.075, 0.02, 0.92, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
