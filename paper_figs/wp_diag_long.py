@@ -6,7 +6,7 @@ dynamically imbalanced and dynamically balanced diagnostics used for
 WP_diag_long.png.
 
 Optionally loads moisture-convergence cache files produced by
-mse_budget_wp_2wk.py and overlays MC and precipitation with SST tendency.
+mse_budget_wp_2wk.py and overlays MC with SST tendency.
 """
 
 from __future__ import annotations
@@ -496,7 +496,7 @@ def line(ax: plt.Axes, da: xr.DataArray, **kwargs: object) -> list[object]:
     return ax.plot(da.time.values, da.values, **kwargs)
 
 
-def plot_sst_mc_precip(
+def plot_sst_mc(
     ax: plt.Axes,
     case: dict[str, xr.DataArray],
     mc_ds: xr.Dataset | None,
@@ -505,7 +505,6 @@ def plot_sst_mc_precip(
     ax.set_title(title, fontsize=12, fontweight="bold")
     color_sst = "tab:green"
     color_mc = "tab:blue"
-    color_pr = "0.25"
 
     line1 = line(
         ax,
@@ -527,16 +526,6 @@ def plot_sst_mc_precip(
     ax2.set_ylabel("MC (mm day-1)", color=color_mc)
     ax2.tick_params(axis="y", labelcolor=color_mc)
     ax2.set_ylim(-10, 120)
-
-    ax3 = ax.twinx()
-    ax3.spines["right"].set_position(("axes", 1.22))
-    ax3.spines["right"].set_color(color_pr)
-    precip_mm_day = case["precip"]
-    line3 = line(ax3, precip_mm_day, color=color_pr, label="Precip", linewidth=1.6, alpha=0.65)
-    ax3.set_ylabel("Precip (mm day-1)", color=color_pr)
-    ax3.tick_params(axis="y", labelcolor=color_pr)
-    ax3.set_ylim(0, 120)
-    lines += line3
 
     ax.legend(lines, [ln.get_label() for ln in lines], loc="upper right")
 
@@ -571,6 +560,7 @@ def plot_omega_cape(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> 
     ax.set_title(title, fontsize=12, fontweight="bold")
     color1 = "green"
     color2 = "darkblue"
+    color3 = "0.45"
 
     line1 = line(ax, case["cape"], color=color1, label="CAPE")
     ax.set_ylabel("CAPE J kg-1", color=color1)
@@ -584,7 +574,22 @@ def plot_omega_cape(ax: plt.Axes, case: dict[str, xr.DataArray], title: str) -> 
     ax2.tick_params(axis="y", labelcolor=color2)
     ax2.set_ylim(-1.2, 2.1)
 
-    lines = line1 + line2
+    ax3 = ax.twinx()
+    ax3.spines["right"].set_position(("axes", 1.28))
+    ax3.spines["right"].set_color(color3)
+    line3 = line(
+        ax3,
+        case["precip"],
+        color=color3,
+        label="Precip",
+        linewidth=1.6,
+        alpha=0.55,
+    )
+    ax3.set_ylabel("Precip (mm day-1)", color=color3)
+    ax3.tick_params(axis="y", labelcolor=color3)
+    ax3.set_ylim(0, 120)
+
+    lines = line1 + line2 + line3
     ax.legend(lines, [line.get_label() for line in lines], loc="upper right")
 
 
@@ -623,24 +628,24 @@ def plot_figure(
     )
 
     # Row 1: imbalanced
-    plot_sst_mc_precip(
+    plot_sst_mc(
         plt.subplot(2, ncols, 1),
         imbalanced,
         mc_data["imbalanced"] if has_mc else None,
-        "(a) SST tendency, MC, and Precip",
+        "(a) SST tendency and MC",
     )
     plot_heat_fluxes(plt.subplot(2, ncols, 2), imbalanced, "(b) Heat Fluxes")
-    plot_omega_cape(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500 and CAPE")
+    plot_omega_cape(plt.subplot(2, ncols, 3), imbalanced, "(c) Omega500, CAPE, and Precip")
 
     # Row 2: balanced
-    plot_sst_mc_precip(
+    plot_sst_mc(
         plt.subplot(2, ncols, ncols + 1),
         balanced,
         mc_data["balanced"] if has_mc else None,
-        "(d) SST tendency, MC, and Precip",
+        "(d) SST tendency and MC",
     )
     plot_heat_fluxes(plt.subplot(2, ncols, ncols + 2), balanced, "(e) Heat Fluxes")
-    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(f) Omega500 and CAPE")
+    plot_omega_cape(plt.subplot(2, ncols, ncols + 3), balanced, "(f) Omega500, CAPE, and Precip")
 
     plt.tight_layout(rect=[0.075, 0.02, 0.92, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
