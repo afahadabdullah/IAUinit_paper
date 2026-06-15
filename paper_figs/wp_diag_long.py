@@ -632,9 +632,9 @@ def plot_figure(
     ncols = 3
 
     progress(f"Plotting figure to {output} ({'with' if has_mc else 'without'} MC overlays, {ncols} columns)")
-    fig = plt.figure(figsize=(14, 6))
+    fig = plt.figure(figsize=(14, 8))
     fig.text(
-        0.025,
+        0.02,
         0.75,
         "Dynamically Imbalanced",
         va="center",
@@ -645,7 +645,7 @@ def plot_figure(
         color="blue",
     )
     fig.text(
-        0.025,
+        0.02,
         0.25,
         "Dynamically Balanced",
         va="center",
@@ -682,7 +682,7 @@ def plot_figure(
 
     apply_common_time_axis(axes, common_time_bounds([imbalanced, balanced], mc_data if has_mc else None))
 
-    plt.tight_layout(rect=[0.075, 0.02, 0.92, 0.96])
+    plt.tight_layout(rect=[0.06, 0.02, 0.92, 0.96])
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(fig)
